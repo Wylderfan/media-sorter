@@ -6,7 +6,16 @@ CONFIG=${MEDIA_SORTER_CONFIG:-${HOME}/.config/media-sorter/config}
 SOURCE='' SERVER='' USER_NAME='' DEST=''
 APPLY=0
 transferred=0 skipped=0 conflicted=0 failed=0 approved=0
-quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+quote() {
+    # Emit POSIX single-quoted text without Bash-version-dependent substitution.
+    local rest=$1
+    printf "'"
+    while [[ "$rest" == *"'"* ]]; do
+        printf '%s%s' "${rest%%\'*}" "'\\''"
+        rest=${rest#*\'}
+    done
+    printf "%s'" "$rest"
+}
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 summary() { printf 'Summary: transferred=%d skipped=%d conflicted=%d failed=%d approved=%d\n' "$transferred" "$skipped" "$conflicted" "$failed" "$approved"; }
 ask() { [ -t 3 ] || return 1; printf '%s' "$1" >&2; IFS= read -r REPLY <&3; }
