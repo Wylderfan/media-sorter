@@ -71,13 +71,14 @@ load() {
 SSH_TRANSPORT=(ssh -o BatchMode=yes -o ConnectTimeout=10)
 remote() { "${SSH_TRANSPORT[@]}" -n "$USER_NAME@$SERVER" "export LC_ALL=C LANG=C; $1"; }
 help() {
-    printf '%s\n' 'Usage: media-sorter configure | movies [--source /path] [--apply] | --help' 'Movies accepts MKV and MP4 (case insensitive) and previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. No TV support.'
+    printf '%s\n' 'Usage: media-sorter configure | movies [--source /path] [--apply] | tv [--source /path] [--apply] | configure-tv | --help' 'Movies accepts MKV and MP4 (case insensitive) and previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. TV additionally requires Python 3 locally/remotely and Linux renameat2.'
 }
 case "${1:---help}" in
     --help|-h) help; exit 0;;
     configure) [ "$#" -eq 1 ] || die 'configure takes no arguments.'; configure; exit 0;;
+    tv|configure-tv) exec python3 "$(dirname -- "$0")/../lib/tv.py" "$@";;
     movies) shift;;
-    *) die 'Unsupported command; use movies, configure, or --help. TV/both are not supported.';;
+    *) die 'Unsupported command; use movies, configure, or --help. both is not supported.';;
 esac
 override=
 while [ "$#" -gt 0 ]; do
