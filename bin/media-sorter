@@ -3,7 +3,7 @@
 set -uo pipefail
 exec 3<&0
 CONFIG=${MEDIA_SORTER_CONFIG:-${HOME}/.config/media-sorter/config}
-SOURCE= SERVER= USER_NAME= DEST=
+SOURCE='' SERVER='' USER_NAME='' DEST=''
 APPLY=0
 transferred=0 skipped=0 conflicted=0 failed=0 approved=0
 quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }

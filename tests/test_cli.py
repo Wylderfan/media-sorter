@@ -246,6 +246,20 @@ if [ "$1" = "$FAIL_SCAN" ]; then echo 'find: Permission denied' >&2; exit 1; fi
                 self.assertIn('approved=' + ('0' if folder == self.source else '1'), output)
                 self.assertEqual(list(self.dest.iterdir()), [])
 
+    def test_unreadable_movie_directory(self):
+        self.movie.chmod(0)
+        try:
+            if os.access(self.movie, os.R_OK):
+                self.skipTest('Current user bypasses directory permissions')
+            status, output = self.run_cli('movies', '--apply')
+            self.assertNotEqual(status, 0, output)
+            self.assertIn('cannot scan movie folder', output)
+            self.assertIn('failed=1', output)
+            self.assertIn('approved=0', output)
+            self.assertEqual(list(self.dest.iterdir()), [])
+        finally:
+            self.movie.chmod(0o755)
+
     def test_transport_options(self):
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
