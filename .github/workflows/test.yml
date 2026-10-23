@@ -29,4 +29,5 @@ jobs:
           /bin/bash --version
           /bin/bash -n bin/media-sorter
           shellcheck bin/media-sorter
+          python3 -m py_compile lib/tv.py lib/tv_remote.py
           python3 -m unittest discover -s tests -v
