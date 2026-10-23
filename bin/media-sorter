@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Compatible with Bash 3.2; configuration is data, never shell code.
+set -uo pipefail
+exec 3<&0
+CONFIG=${MEDIA_SORTER_CONFIG:-${HOME}/.config/media-sorter/config}
+SOURCE='' SERVER='' USER_NAME='' DEST=''
+APPLY=0
+transferred=0 skipped=0 conflicted=0 failed=0 approved=0
+quote() {
+    # Emit POSIX single-quoted text without Bash-version-dependent substitution.
+    local rest=$1
+    printf "'"
+    while [[ "$rest" == *"'"* ]]; do
+        printf '%s%s' "${rest%%\'*}" "'\\''"
+        rest=${rest#*\'}
+    done
+    printf "%s'" "$rest"
+}
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+summary() { printf 'Summary: transferred=%d skipped=%d conflicted=%d failed=%d approved=%d\n' "$transferred" "$skipped" "$conflicted" "$failed" "$approved"; }
+ask() { [ -t 3 ] || return 1; printf '%s' "$1" >&2; IFS= read -r REPLY <&3; }
+valid() {
+    case "$SOURCE:$DEST" in *$'\n'*|*$'\r'*) return 1;; esac
+    case "$SOURCE" in /*) ;; *) return 1;; esac
+    case "$DEST" in /*) ;; *) return 1;; esac
+    [[ "$SERVER" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || return 1
+    [[ "$USER_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || return 1
+    [ -d "$SOURCE" ] && [ -r "$SOURCE" ]
+}
+configure() {
+    ask 'Absolute Movies source: ' || die 'Setup cancelled; interactive input required.'; SOURCE=$REPLY
+    ask 'Server hostname or SSH alias: ' || die 'Setup cancelled.'; SERVER=$REPLY
+    ask 'SSH username: ' || die 'Setup cancelled.'; USER_NAME=$REPLY
+    ask 'Absolute Movies destination: ' || die 'Setup cancelled.'; DEST=$REPLY
+    valid || die 'Invalid settings; source must be a readable absolute directory, destination absolute, and host/user valid.'
+    ask 'Save settings? [yes/no] ' || die 'Setup cancelled.'
+    [ "$REPLY" = yes ] || die 'Setup cancelled.'
+    mkdir -p -- "$(dirname -- "$CONFIG")" || die 'Cannot create configuration directory.'
+    local tmp
+    tmp=$(umask 077; mktemp "${CONFIG}.XXXXXX") || die 'Cannot create configuration.'
+    printf '%s\n' "$SOURCE" "$SERVER" "$USER_NAME" "$DEST" > "$tmp"
+    mv -f -- "$tmp" "$CONFIG" || die 'Cannot save configuration.'
+    printf 'Saved %s\n' "$CONFIG"
+}
+load() {
+    if [ ! -f "$CONFIG" ]; then configure; fi
+    { IFS= read -r SOURCE && IFS= read -r SERVER && IFS= read -r USER_NAME && IFS= read -r DEST; } < "$CONFIG" || die 'Invalid configuration; run configure.'
+}
+SSH_TRANSPORT=(ssh -o BatchMode=yes -o ConnectTimeout=10)
+remote() { "${SSH_TRANSPORT[@]}" -n "$USER_NAME@$SERVER" "$1"; }
+help() {
+    printf '%s\n' 'Usage: media-sorter configure | movies [--source /path] [--apply] | --help' 'Movies previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. No TV support.'
+}
+case "${1:---help}" in
+    --help|-h) help; exit 0;;
+    configure) [ "$#" -eq 1 ] || die 'configure takes no arguments.'; configure; exit 0;;
+    movies) shift;;
+    *) die 'Unsupported command; use movies, configure, or --help. TV/both are not supported.';;
+esac
+override=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --apply) APPLY=1; shift;;
+        --source) [ "$#" -ge 2 ] || die '--source requires a path.'; override=$2; shift 2;;
+        *) die "Unknown argument: $1";;
+    esac
+done
+trap 'printf "Interrupted; originals retained. Hidden staging files may need cleanup.\n" >&2; summary; exit 130' INT TERM
+load
+[ -z "$override" ] || SOURCE=$override
+valid || die 'Invalid settings or unavailable source; run configure.'
+[ -t 3 ] || die 'Interactive input is required for per-file approval; nothing transferred.'
+command -v rsync >/dev/null || die 'Install rsync 3.x (on macOS: brew install rsync).'
+rsync --help | grep -e --protect-args -e --secluded-args >/dev/null || die 'Local rsync must support --protect-args; install rsync 3.x.'
+remote "command -v rsync >/dev/null && rsync --help | grep -e --protect-args -e --secluded-args >/dev/null" || die 'SSH failed or remote rsync lacks --protect-args; check access and install rsync 3.x.'
+remote "test -d $(quote "$DEST") && test -w $(quote "$DEST")" || die 'Remote destination must exist and be writable.'
+[ "$APPLY" -eq 1 ] || printf 'PREVIEW: no remote library changes will be made.\n'
+# Snapshot each enumeration and check find before consuming any partial output.
+scan_dir=$(mktemp -d "${TMPDIR:-/tmp}/media-sorter.XXXXXX") || die 'Cannot create scan workspace.'
+trap 'rm -rf -- "$scan_dir"' EXIT
+if ! find "$SOURCE" -mindepth 1 -maxdepth 1 -type d -print0 > "$scan_dir/folders"; then
+    printf 'Error: cannot scan source: %q\n' "$SOURCE" >&2
+    failed=$((failed+1)); summary; exit 1
+fi
+while IFS= read -r -d '' folder; do
+    if ! find "$folder" -maxdepth 1 -type f -iname '*.mkv' -print0 > "$scan_dir/files"; then
+        printf 'Error: cannot scan movie folder: %q\n' "$folder" >&2
+        failed=$((failed+1)); continue
+    fi
+    files=(); largest=-1; suggestion=0
+    while IFS= read -r -d '' file; do
+        # Every immediate MKV stays selectable; names cannot establish main-feature identity.
+        files[${#files[@]}]=$file
+        if ! size=$(wc -c < "$file"); then
+            printf 'Error: cannot inspect candidate: %q\n' "$file" >&2
+            failed=$((failed+1)); files=(); break
+        fi
+        if [ "$size" -gt "$largest" ]; then largest=$size; suggestion=${#files[@]}; fi
+    done < "$scan_dir/files"
+    [ "${#files[@]}" -gt 0 ] || continue
+    printf '\nMovie folder: %q\n' "${folder##*/}"
+    i=0
+    for file in "${files[@]}"; do i=$((i+1)); printf '  %d: %q' "$i" "${file##*/}"; [ "$i" -ne "$suggestion" ] || printf ' (largest; suggestion only)'; printf '\n'; done
+    ask 'Choose a file number, or Enter to skip: ' || { skipped=$((skipped+1)); continue; }
+    choice=$REPLY
+    case "$choice" in ''|*[!0-9]*) skipped=$((skipped+1)); continue;; esac
+    # Bound the numeric input before arithmetic, including leading-zero input.
+    [ "${#choice}" -le 6 ] || { skipped=$((skipped+1)); continue; }
+    choice=$((10#$choice))
+    if [ "$choice" -lt 1 ] || [ "$choice" -gt "${#files[@]}" ]; then skipped=$((skipped+1)); continue; fi
+    file=${files[$((choice-1))]}
+    printf 'Selected: %q\n' "$file"
+    ask 'Approve this file as the main feature? Type yes: ' || REPLY=
+    [ "$REPLY" = yes ] || { skipped=$((skipped+1)); continue; }
+    approved=$((approved+1))
+    target_dir=${DEST%/}/${folder##*/}; target=$target_dir/${file##*/}
+    remote "test ! -e $(quote "$target") && test ! -L $(quote "$target")"
+    status=$?
+    if [ "$status" -eq 1 ]; then printf 'Conflict: %q\n' "$target"; conflicted=$((conflicted+1)); continue; fi
+    if [ "$status" -ne 0 ]; then failed=$((failed+1)); continue; fi
+    if [ "$APPLY" -eq 0 ]; then printf 'Would transfer to %q\n' "$target"; continue; fi
+    stage=$target_dir/.media-sorter-$$-$RANDOM-$RANDOM
+    # mkdir is exclusive; a partial payload never has the final media filename.
+    if ! remote "mkdir -p -- $(quote "$target_dir") && mkdir -- $(quote "$stage")"; then failed=$((failed+1)); continue; fi
+    if rsync --protect-args -e "${SSH_TRANSPORT[*]}" -t -- "$file" "$USER_NAME@$SERVER:$stage/payload"; then
+        # Hard-link publication is atomic and fails if a final file already exists.
+        remote "ln -T -- $(quote "$stage/payload") $(quote "$target")"
+        result=$?
+        if [ "$result" -eq 0 ]; then transferred=$((transferred+1)); else failed=$((failed+1)); fi
+    else
+        failed=$((failed+1))
+    fi
+    remote "rm -f -- $(quote "$stage/payload") && rmdir -- $(quote "$stage")" || printf 'Warning: staging cleanup failed: %q\n' "$stage" >&2
+done < "$scan_dir/folders"
+summary
+[ "$failed" -eq 0 ]
