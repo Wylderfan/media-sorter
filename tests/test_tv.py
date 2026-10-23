@@ -1,5 +1,9 @@
 """TV fixtures use real rsync over local fake SSH; never a real server."""
 import os
+import json
+import subprocess
+import tempfile
+from unittest import mock
 import pathlib
 import shutil
 import unittest
@@ -7,7 +11,12 @@ import test_cli
 
 
 class TVIntegration(unittest.TestCase):
-    setUp = test_cli.CLIIntegration.setUp
+    def setUp(self):
+        # macOS /var is a symlink; fixtures must use the physical temp root,
+        # just like the production policy requires for source/destination paths.
+        with mock.patch('tempfile.tempdir', str(pathlib.Path(tempfile.gettempdir()).resolve())):
+            test_cli.CLIIntegration.setUp(self)
+
     run_cli = test_cli.CLIIntegration.run_cli
 
     def prepare(self, layout='nested', name="Show's $(touch BAD) (2020)", season='Season 01'):
@@ -138,6 +147,21 @@ if [ "$1" != --help ]; then
             else:
                 self.assertIn('conflicted=1', output)
                 self.assertEqual([p.name for p in target.iterdir()], ['keep'])
+
+    def test_atomic_publication_collision_after_check(self):
+        self.prepare()
+        stage = self.dest / '.media-sorter-tv-test'
+        (stage / 'payload').mkdir(parents=True)
+        (stage / 'payload' / 'episode.mkv').write_bytes(b'ours')
+        code = (test_cli.CLI.parent.parent / 'lib/tv_remote.py').read_text()
+        code = code.replace('        rename_new(payload, target)',
+                            '        os.mkdir(target)\n        rename_new(payload, target)')
+        result = subprocess.run(['python3', '-c', code, json.dumps([
+            'publish', str(self.dest), 'Show', 'Season 01', str(stage)])],
+            env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(list((self.dest / 'Show' / 'Season 01').iterdir()), [])
+        self.assertTrue((stage / 'payload' / 'episode.mkv').exists())
 
     def test_multiple_seasons_and_shows(self):
         self.prepare(name='Alpha')
