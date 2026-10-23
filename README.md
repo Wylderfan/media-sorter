@@ -32,8 +32,17 @@ layout preserves `Movie Title (Year)/chosen-file.mkv`. Only immediate movie
 folders and their immediate MKVs are candidates. Nested files (including bonus
 content) are ignored. Every immediate MKV remains
 selectable, including names such as `Extra Ordinary (2019).mkv`, `bonus.mkv`, or
-`sample.mkv`. The largest file is merely a suggestion, even if it is an extra. Choose
-a number and type `yes` to approve; empty or invalid input skips the movie.
+`sample.mkv`. Candidates are offered largest first, showing filename and size in
+bytes. Size is only a heuristic: the largest file can still be an extra.
+
+For each candidate, `Send this file? [Y/n]` accepts Enter, Y, or Yes to approve
+(case insensitive). N or No offers the next candidate in that movie folder.
+Invalid input repeats the prompt; rejecting every candidate skips the movie.
+After the first approval, no more candidates are offered for that folder, even
+if that transfer fails or conflicts. At most one file per movie is selected per
+run. EOF (Ctrl-D) stops the batch with nonzero status and never approves a file;
+any earlier completed transfers remain. Preview uses `Preview this file? [Y/n]`
+and makes no remote library changes. `--apply` is still required to send files.
 Review carefully: titles and main-feature identity are not inferred or verified.
 
 Preview checks connectivity, capabilities, destination access, and collisions
@@ -72,6 +81,6 @@ Tests do not establish real SSH connectivity or access to your server.
 ## Remaining work and limits
 
 This is a small MVP. TV/both commands are rejected. Duration-based suggestions,
-TV identification and ordering, and real Mac-to-Linux SSH validation remain future
-work. The destination must support hard links; publication does not overwrite
+TV identification and ordering remain future work. A user has reported a
+successful Mac-to-Linux test; automated checks use local fixtures, not a real server. The destination must support hard links; publication does not overwrite
 existing files. Interruptions may leave staging data as described above.
