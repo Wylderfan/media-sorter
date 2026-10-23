@@ -82,5 +82,6 @@ Tests do not establish real SSH connectivity or access to your server.
 
 This is a small MVP. TV/both commands are rejected. Duration-based suggestions,
 TV identification and ordering remain future work. A user has reported a
-successful Mac-to-Linux test; automated checks use local fixtures, not a real server. The destination must support hard links; publication does not overwrite
+successful Mac-to-Linux test; automated checks use local fixtures, not a real
+server. The destination must support hard links; publication does not overwrite
 existing files. Interruptions may leave staging data as described above.

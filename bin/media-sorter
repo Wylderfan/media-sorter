@@ -97,19 +97,19 @@ while IFS= read -r -d '' folder; do
         # Stable insertion by size, preserving arbitrary filenames and Bash 3.2.
         i=${#files[@]}
         while [ "$i" -gt 0 ] && [ "$size" -gt "${sizes[$((i-1))]}" ]; do
-            files[$i]=${files[$((i-1))]}
-            sizes[$i]=${sizes[$((i-1))]}
+            files[i]=${files[$((i-1))]}
+            sizes[i]=${sizes[$((i-1))]}
             i=$((i-1))
         done
-        files[$i]=$file
-        sizes[$i]=$size
+        files[i]=$file
+        sizes[i]=$size
     done < "$scan_dir/files"
     [ "${#files[@]}" -gt 0 ] || continue
     printf '\nMovie folder: %q\n' "${folder##*/}"
     selected=0
     i=0
     for file in "${files[@]}"; do
-        printf 'Candidate: %q (%d bytes; size is a suggestion only)\n' "${file##*/}" "${sizes[$i]}"
+        printf 'Candidate: %q (%d bytes; size is a suggestion only)\n' "${file##*/}" "${sizes[i]}"
         i=$((i+1))
         while :; do
             if [ "$APPLY" -eq 1 ]; then prompt='Send this file? [Y/n] '; else prompt='Preview this file? [Y/n] '; fi
