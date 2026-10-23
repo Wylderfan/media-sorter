@@ -4,15 +4,29 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install rsync
-        run: sudo apt-get update && sudo apt-get install -y rsync
+      - name: Install Linux tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rsync shellcheck
+      - name: Install macOS tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install rsync coreutils shellcheck
+          echo "MEDIA_SORTER_TEST_RSYNC=$(brew --prefix rsync)/bin/rsync" >> "$GITHUB_ENV"
+          # Only remote ln needs GNU semantics; local find remains the macOS tool.
+          echo "TEST_LN=$(brew --prefix coreutils)/bin/gln" >> "$GITHUB_ENV"
       - name: Validate CLI and run isolated integration tests
         env:
-          MEDIA_SORTER_TEST_RSYNC: /usr/bin/rsync
+          MEDIA_SORTER_TEST_BASH: /bin/bash
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          bash -n bin/media-sorter
+          /bin/bash --version
+          /bin/bash -n bin/media-sorter
+          shellcheck bin/media-sorter
           python3 -m unittest discover -s tests -v
