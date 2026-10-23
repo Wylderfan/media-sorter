@@ -104,7 +104,7 @@ cp -- "$src" "${dst#*:}"
     def test_transfer_and_collision(self):
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
-        target = self.dest / self.movie.name / "main's $film.mkv"
+        target = self.dest / "main's $film.mkv"
         self.assertEqual(target.read_bytes(), b'movie' * 100)
         self.assertEqual(len(list(target.parent.iterdir())), 1)
         self.assertTrue((self.movie / target.name).exists())
@@ -132,8 +132,8 @@ cp -- "$src" "${dst#*:}"
         self.assertNotEqual(status, 0, output)
         self.assertIn('failed=1', output)
         self.assertEqual(output.count('[Y/n] '), 1)
-        self.assertFalse((self.dest / self.movie.name / "main's $film.mkv").exists())
-        self.assertEqual(list((self.dest / self.movie.name).iterdir()), [])
+        self.assertFalse((self.dest / "main's $film.mkv").exists())
+        self.assertEqual(list(self.dest.iterdir()), [])
 
     def test_unavailable_host(self):
         self.env['FAIL_SSH'] = 'yes'
@@ -183,7 +183,7 @@ cp -- "$src" "${dst#*:}"
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
         self.assertIn('transferred=1', output)
-        target = self.dest / self.movie.name / "main's $film.mkv"
+        target = self.dest / "main's $film.mkv"
         self.assertEqual(target.read_bytes(), (self.movie / target.name).read_bytes())
 
     def test_all_top_level_candidates_remain_selectable(self):
@@ -197,8 +197,8 @@ cp -- "$src" "${dst#*:}"
                     return '' if menu.lstrip().startswith(escaped + ' (') else 'n'
                 status, output = self.run_cli('movies', '--apply', answers=select_title)
                 self.assertEqual(status, 0, output)
-                self.assertEqual((self.dest / self.movie.name / name).read_bytes(), b'title')
-                self.assertFalse((self.dest / self.movie.name / 'extras').exists())
+                self.assertEqual((self.dest / name).read_bytes(), b'title')
+                self.assertFalse((self.dest / 'extras').exists())
                 candidate.unlink()
 
     def test_multiple_movies_and_candidates(self):
@@ -209,7 +209,7 @@ cp -- "$src" "${dst#*:}"
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
         self.assertIn('transferred=2', output)
-        self.assertEqual((self.dest / second.name / 'large.mkv').read_bytes(), b'xx')
+        self.assertEqual((self.dest / 'large.mkv').read_bytes(), b'xx')
 
     def test_no_then_enter_selects_next_largest_only(self):
         (self.movie / 'middle.mkv').write_bytes(b'x' * 20)
@@ -217,7 +217,7 @@ cp -- "$src" "${dst#*:}"
         self.assertEqual(status, 0, output)
         self.assertEqual(re.findall(r'Candidate: .*?\((\d+) bytes;', output), ['500', '20'])
         self.assertIn('transferred=1', output)
-        self.assertEqual([p.name for p in (self.dest / self.movie.name).iterdir()], ['middle.mkv'])
+        self.assertEqual([p.name for p in self.dest.iterdir()], ['middle.mkv'])
 
     def test_largest_first_and_exhaustion(self):
         (self.movie / 'middle.mkv').write_bytes(b'x' * 20)
@@ -238,7 +238,7 @@ cp -- "$src" "${dst#*:}"
         self.assertIn('transferred=1 skipped=1', output)
         self.assertIn('approved=1', output)
         self.assertFalse((self.dest / self.movie.name).exists())
-        self.assertEqual((self.dest / second.name / 'accepted.mkv').read_bytes(), b'movie')
+        self.assertEqual((self.dest / 'accepted.mkv').read_bytes(), b'movie')
 
     def test_case_insensitive_responses_and_invalid_reprompt(self):
         for yes in ['y', 'Y', 'yes', 'YeS', 'YES']:
@@ -286,7 +286,7 @@ cp -- "$src" "${dst#*:}"
         self.assertEqual(output.count('[Y/n] '), 3)
         self.assertEqual(len(list(self.dest.iterdir())), 3)
         for name in loose_names:
-            self.assertEqual((self.dest / name.rsplit('.', 1)[0] / name).read_bytes(), b'loose')
+            self.assertEqual((self.dest / name).read_bytes(), b'loose')
             self.assertEqual((self.source / name).read_bytes(), b'loose')
         self.assertFalse((self.root / 'BAD').exists())
         status, output = self.run_cli('movies', '--apply')
@@ -301,18 +301,41 @@ cp -- "$src" "${dst#*:}"
                                       answers=lambda candidate: '' if 'accepted.mkv' in candidate else 'n')
         self.assertEqual(status, 0, output)
         self.assertIn('transferred=1 skipped=2', output)
-        self.assertEqual([p.name for p in self.dest.iterdir()], ['accepted'])
-        self.assertEqual((self.dest / 'accepted' / 'accepted.mkv').read_bytes(), b'yes')
+        self.assertEqual([p.name for p in self.dest.iterdir()], ['accepted.mkv'])
+        self.assertEqual((self.dest / 'accepted.mkv').read_bytes(), b'yes')
 
-    def test_loose_movie_without_usable_stem_is_reported(self):
+    def test_same_basename_across_folders_and_loose_file_conflicts(self):
         shutil.rmtree(self.movie)
-        for name in ['.mkv', '..mkv', '...mkv']:
-            (self.source / name).write_bytes(b'no')
+        originals = [self.source / 'same.mkv']
+        for folder in ['First movie', 'Second movie']:
+            directory = self.source / folder
+            directory.mkdir()
+            originals.append(directory / 'same.mkv')
+            (directory / 'alternate.mkv').write_bytes(b'x')
+        for i, source in enumerate(originals):
+            source.write_bytes(('original-' + str(i)).encode())
         status, output = self.run_cli('movies', '--apply')
-        self.assertNotEqual(status, 0, output)
-        self.assertIn('failed=3', output)
-        self.assertIn('approved=0', output)
-        self.assertIn('needs a usable filename', output)
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=1 skipped=0 conflicted=2', output)
+        self.assertEqual(output.count('[Y/n] '), 3)
+        self.assertEqual([p.name for p in self.dest.iterdir()], ['same.mkv'])
+        winner = (self.dest / 'same.mkv').read_bytes()
+        self.assertIn(winner, [p.read_bytes() for p in originals])
+        for i, source in enumerate(originals):
+            self.assertEqual(source.read_bytes(), ('original-' + str(i)).encode())
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=0 skipped=0 conflicted=3', output)
+        self.assertEqual((self.dest / 'same.mkv').read_bytes(), winner)
+
+    def test_flat_destination_display(self):
+        shutil.rmtree(self.movie)
+        (self.source / 'plain.mkv').write_bytes(b'movie')
+        status, output = self.run_cli('movies')
+        self.assertEqual(status, 0, output)
+        destination_line = next(line for line in output.splitlines() if line.startswith('Destination:'))
+        self.assertTrue(destination_line.endswith('/plain.mkv'), output)
+        self.assertNotIn('/plain/plain.mkv', output)
         self.assertEqual(list(self.dest.iterdir()), [])
 
     def test_scan_failures_discard_partial_results(self):

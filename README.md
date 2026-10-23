@@ -27,13 +27,15 @@ They are never executed as shell code. Setup requires a terminal and explicit
 `yes` before saving; `--source` does not rewrite saved settings. Paths must be
 absolute and settings cannot contain newlines. No passwords are stored.
 
-The source layout is `Movies/Movie Title (Year)/chosen-file.mkv`; destination
-layout preserves `Movie Title (Year)/chosen-file.mkv`. Loose MKVs directly in
-Movies are also independent movies: `Movies/Some Title.mkv` is sent to
-`Some Title/Some Title.mkv`. The destination folder is exactly the filename
-minus its final `.mkv` extension (case insensitive); no title/year metadata is
-inferred. Review the displayed destination folder and rename the source first
-if needed. Empty, `.` or `..` stems are reported as failures instead of guessed.
+The source can contain movie folders such as `Movies/Movie Title (Year)/chosen-file.mkv`
+or loose files such as `Movies/Some Title.mkv`. Both send the approved file directly
+into the configured destination: `DEST/chosen-file.mkv` or `DEST/Some Title.mkv`.
+Original filenames are preserved; no movie-name destination folders are created.
+The exact destination file path is displayed before approval. Files with the same
+basename from different source folders or loose files share a destination path:
+the first successful publication wins and later collisions are reported and skipped,
+without overwriting or trying another candidate from an already approved folder.
+No title/year metadata or filenames are inferred.
 Each loose MKV gets its own approval; the one-file limit applies per actual
 movie subfolder, not to the entire Movies root. Non-MKV root files and symlinks
 are ignored. Only immediate movie folders and their immediate MKVs are candidates. Nested files (including bonus
@@ -55,7 +57,8 @@ Review carefully: titles and main-feature identity are not inferred or verified.
 
 Preview checks connectivity, capabilities, destination access, and collisions
 without writing remote library files. Apply stages one approved file at a time
-in a unique hidden directory inside its movie folder. An atomic hard link
+in a unique hidden `.media-sorter-*` directory directly inside the configured
+destination. This temporary staging directory is removed after ordinary completion. An atomic hard link
 publishes the finished file without replacing an existing final path; this
 requires hard-link support on the destination filesystem. Staging data is cleaned
 up after ordinary completion or failure. Abrupt interruption can leave a hidden

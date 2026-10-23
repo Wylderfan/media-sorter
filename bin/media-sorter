@@ -83,7 +83,6 @@ if ! find "$SOURCE" -mindepth 1 -maxdepth 1 \( -type d -o \( -type f -iname '*.m
     failed=$((failed+1)); summary; exit 1
 fi
 while IFS= read -r -d '' entry; do
-    movie_name=${entry##*/}
     label='Movie folder'
     if [ -L "$entry" ]; then
         printf 'Error: source entry became a symlink: %q\n' "$entry" >&2
@@ -95,11 +94,6 @@ while IFS= read -r -d '' entry; do
         fi
     else
         label='Loose movie'
-        movie_name=${movie_name%.*}
-        case "$movie_name" in
-            ''|.|..) printf 'Error: loose movie needs a usable filename before .mkv: %q\n' "$entry" >&2
-                failed=$((failed+1)); continue;;
-        esac
         printf '%s\0' "$entry" > "$scan_dir/files" || die 'Cannot prepare candidate scan.'
     fi
     files=(); sizes=()
@@ -121,11 +115,12 @@ while IFS= read -r -d '' entry; do
     done < "$scan_dir/files"
     [ "${#files[@]}" -gt 0 ] || continue
     printf '\n%s: %q\n' "$label" "${entry##*/}"
-    printf 'Destination folder: %q\n' "$movie_name"
     selected=0
     i=0
     for file in "${files[@]}"; do
         printf 'Candidate: %q (%d bytes; size is a suggestion only)\n' "${file##*/}" "${sizes[i]}"
+        target=${DEST%/}/${file##*/}
+        printf 'Destination: %q\n' "$target"
         i=$((i+1))
         while :; do
             if [ "$APPLY" -eq 1 ]; then prompt='Send this file? [Y/n] '; else prompt='Preview this file? [Y/n] '; fi
@@ -144,15 +139,14 @@ while IFS= read -r -d '' entry; do
     [ "$selected" -eq 1 ] || { skipped=$((skipped+1)); continue; }
     printf 'Selected: %q\n' "$file"
     approved=$((approved+1))
-    target_dir=${DEST%/}/$movie_name; target=$target_dir/${file##*/}
     remote "test ! -e $(quote "$target") && test ! -L $(quote "$target")"
     status=$?
     if [ "$status" -eq 1 ]; then printf 'Conflict: %q\n' "$target"; conflicted=$((conflicted+1)); continue; fi
     if [ "$status" -ne 0 ]; then failed=$((failed+1)); continue; fi
     if [ "$APPLY" -eq 0 ]; then printf 'Would transfer to %q\n' "$target"; continue; fi
-    stage=$target_dir/.media-sorter-$$-$RANDOM-$RANDOM
+    stage=${DEST%/}/.media-sorter-$$-$RANDOM-$RANDOM
     # mkdir is exclusive; a partial payload never has the final media filename.
-    if ! remote "mkdir -p -- $(quote "$target_dir") && mkdir -- $(quote "$stage")"; then failed=$((failed+1)); continue; fi
+    if ! remote "mkdir -- $(quote "$stage")"; then failed=$((failed+1)); continue; fi
     if rsync --protect-args -e "${SSH_TRANSPORT[*]}" -t -- "$file" "$USER_NAME@$SERVER:$stage/payload"; then
         # Hard-link publication is atomic and fails if a final file already exists.
         remote "ln -T -- $(quote "$stage/payload") $(quote "$target")"
