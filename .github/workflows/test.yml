@@ -1,0 +1,18 @@
+name: CLI integration tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rsync
+        run: sudo apt-get update && sudo apt-get install -y rsync
+      - name: Validate CLI and run isolated integration tests
+        env:
+          MEDIA_SORTER_TEST_RSYNC: /usr/bin/rsync
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          bash -n bin/media-sorter
+          python3 -m unittest discover -s tests -v
