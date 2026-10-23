@@ -1,6 +1,6 @@
 # media-sorter
 
-A manually invoked movies-only Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie or a loose top-level MKV, and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
+A manually invoked Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie or a loose top-level MKV, and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
 
 ## Running the MVP
 
@@ -91,8 +91,82 @@ Tests do not establish real SSH connectivity or access to your server.
 
 ## Remaining work and limits
 
-This is a small MVP. TV/both commands are rejected. Duration-based suggestions,
-TV identification and ordering remain future work. A user has reported a
+This is a small MVP. The `both` command is rejected. Duration-based suggestions and automatic
+TV episode identification remain out of scope. A user has reported a
 successful Mac-to-Linux test; automated checks use local fixtures, not a real
 server. The destination must support hard links; publication does not overwrite
 existing files. Interruptions may leave staging data as described above.
+
+
+## Experimental TV seasons
+
+```sh
+./bin/media-sorter configure-tv
+./bin/media-sorter tv                       # preview is the default
+./bin/media-sorter tv --source /absolute/path/to/TV
+./bin/media-sorter tv --apply               # still asks for each season
+```
+
+TV uses a separate four-line file at `${MEDIA_SORTER_CONFIG}.tv`, or
+`~/.config/media-sorter/config.tv` by default. Run `configure-tv` explicitly;
+existing movie configuration is neither migrated nor modified. Both modes keep
+source/server/username/destination settings independent. TV additionally needs
+Python **3.8+ locally** and **3.6+ remotely**, plus rsync 3.x on both ends. The
+Bash entry point remains compatible with macOS Bash 3.2. Keep `bin/` and `lib/`
+together when installing this checkout. The TV destination must be Linux with
+libc `renameat2` and filesystem support for `RENAME_NOREPLACE`. Unsupported
+publication fails closed; there is no non-atomic fallback.
+
+Supported layouts are `TV/Show Name (Year)/Season 01/` and
+`TV/Show Name (Year) Season 01/` (also `TV/Season 01/`). Season labels `Season N`
+and `SNN`, optionally preceded by a show name, are recognized only at the end
+of the directory name. A directory containing files is also offered as an
+unlabeled season; otherwise its immediate directories are offered as seasons
+under that show's context. Unlabeled flat seasons containing only subdirectories
+are ambiguous: use a recognizable season directory label first. Loose root
+files and root symlinks are reported and ignored. No deep show/season search or
+episode-name parsing occurs. Empty seasons are skipped. A season containing any
+symlink or special file is rejected in full, not silently copied in part.
+
+The parent show directory or the show prefix in a season directory supplies a
+suggestion. **Every show and season suggestion must be confirmed or corrected**;
+blank/unknown identities require entry, and a year is never invented. Enter a
+show name with its year when known, or without a year. Season numbers 0–99 are
+accepted (0 permits explicitly supplied specials). The complete target is
+`TV_DEST/Show Name (Year)/Season NN/`, with the year omitted when absent. Before
+`Send this season? [Y/n]` (or preview), the CLI lists all relative contents and
+the regular-file count. This is a file count, not an inferred episode count.
+Enter/Y/Yes approves; N/No skips the whole season; invalid input repeats; EOF
+stops with failure and does not approve the pending season. No file is renamed.
+All regular files, sidecars, empty subdirectories, and relative subtrees inside
+an approved season are retained; originals are never removed.
+
+Preview performs read-only SSH capability/path/collision checks and never creates
+remote directories. Apply first copies into an exclusive hidden
+`.media-sorter-tv-*` directory inside the TV destination. Only a successful copy
+with unchanged source inventory is published, using an atomic, exclusive directory
+rename. Existing seasons (including empty directories, files, and symlinks) are
+conflicts: no overwrite, merge, duplicate verification, or resume. A target that
+appears during copying also wins and is untouched. Existing show directories can
+hold other seasons. A show path must be a real directory; source/destination
+ancestors cannot be symlinks. Absolute configuration paths reject traversal
+components and control characters; show/season identities must be single safe
+components. SSH commands quote data, and rsync uses protected arguments and the
+same SSH options as movies.
+
+Ordinary copy/publication failure removes the private stage and reports failure;
+a concurrent season collision is reported as a conflict. Abrupt termination or
+lost SSH may leave a hidden stage, and failed publication can leave an empty show
+directory. Inspect abandoned stages before removing them manually. This tool
+assumes trusted, quiescent source and destination directories: finish ripping
+before running it, and do not move, replace, or modify directory ancestors during
+transfer. Inventory checks detect ordinary source changes, but are not a snapshot
+or protection against a malicious filesystem writer. No remote administration,
+Jellyfin refresh/API, metadata service, or real-media test is performed.
+
+TV tests add both layouts, multiple shows/seasons, identity corrections with no
+guess, recursive real-rsync transfers, punctuation in names, preview immutability,
+rejection/EOF, old configuration compatibility, symlinks/special files, transfer
+failure, and a target created during copying. On macOS the local remote fixture
+maps Linux exclusive rename to macOS `renamex_np(RENAME_EXCL)`; production still
+requires Linux. CI runs the movie and TV suites on Ubuntu and macOS.
