@@ -266,6 +266,55 @@ cp -- "$src" "${dst#*:}"
             self.assertEqual(output.count('Movie folder:'), 1)
             self.assertEqual(list(self.dest.iterdir()), [])
 
+    def test_mixed_layout_multiple_loose_movies_and_conflicts(self):
+        loose_names = ["Loose's $(touch BAD) (2020).mkv", 'Another.Movie.MKV']
+        for name in loose_names:
+            (self.source / name).write_bytes(b'loose')
+        outside = self.root / 'outside'
+        outside.mkdir()
+        (outside / 'hidden.mkv').write_bytes(b'hidden')
+        (self.source / 'linked-folder').symlink_to(outside, target_is_directory=True)
+        (self.source / 'linked.mkv').symlink_to(outside / 'hidden.mkv')
+        (self.source / 'notes.txt').write_text('ignore')
+        status, output = self.run_cli('movies')
+        self.assertEqual(status, 0, output)
+        self.assertIn('approved=3', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=3', output)
+        self.assertEqual(output.count('[Y/n] '), 3)
+        self.assertEqual(len(list(self.dest.iterdir())), 3)
+        for name in loose_names:
+            self.assertEqual((self.dest / name.rsplit('.', 1)[0] / name).read_bytes(), b'loose')
+            self.assertEqual((self.source / name).read_bytes(), b'loose')
+        self.assertFalse((self.root / 'BAD').exists())
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('conflicted=3', output)
+        self.assertEqual(output.count('[Y/n] '), 3)
+
+    def test_decline_loose_movie_and_folder_continue_independently(self):
+        (self.source / 'declined.mkv').write_bytes(b'no')
+        (self.source / 'accepted.mkv').write_bytes(b'yes')
+        status, output = self.run_cli('movies', '--apply',
+                                      answers=lambda candidate: '' if 'accepted.mkv' in candidate else 'n')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=1 skipped=2', output)
+        self.assertEqual([p.name for p in self.dest.iterdir()], ['accepted'])
+        self.assertEqual((self.dest / 'accepted' / 'accepted.mkv').read_bytes(), b'yes')
+
+    def test_loose_movie_without_usable_stem_is_reported(self):
+        shutil.rmtree(self.movie)
+        for name in ['.mkv', '..mkv', '...mkv']:
+            (self.source / name).write_bytes(b'no')
+        status, output = self.run_cli('movies', '--apply')
+        self.assertNotEqual(status, 0, output)
+        self.assertIn('failed=3', output)
+        self.assertIn('approved=0', output)
+        self.assertIn('needs a usable filename', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+
     def test_scan_failures_discard_partial_results(self):
         real_find = shutil.which('find')
         tool = self.root / 'tools' / 'find'

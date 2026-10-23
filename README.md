@@ -1,6 +1,6 @@
 # media-sorter
 
-A manually invoked movies-only Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
+A manually invoked movies-only Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie or a loose top-level MKV, and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
 
 ## Running the MVP
 
@@ -28,8 +28,15 @@ They are never executed as shell code. Setup requires a terminal and explicit
 absolute and settings cannot contain newlines. No passwords are stored.
 
 The source layout is `Movies/Movie Title (Year)/chosen-file.mkv`; destination
-layout preserves `Movie Title (Year)/chosen-file.mkv`. Only immediate movie
-folders and their immediate MKVs are candidates. Nested files (including bonus
+layout preserves `Movie Title (Year)/chosen-file.mkv`. Loose MKVs directly in
+Movies are also independent movies: `Movies/Some Title.mkv` is sent to
+`Some Title/Some Title.mkv`. The destination folder is exactly the filename
+minus its final `.mkv` extension (case insensitive); no title/year metadata is
+inferred. Review the displayed destination folder and rename the source first
+if needed. Empty, `.` or `..` stems are reported as failures instead of guessed.
+Each loose MKV gets its own approval; the one-file limit applies per actual
+movie subfolder, not to the entire Movies root. Non-MKV root files and symlinks
+are ignored. Only immediate movie folders and their immediate MKVs are candidates. Nested files (including bonus
 content) are ignored. Every immediate MKV remains
 selectable, including names such as `Extra Ordinary (2019).mkv`, `bonus.mkv`, or
 `sample.mkv`. Candidates are offered largest first, showing filename and size in
@@ -37,7 +44,8 @@ bytes. Size is only a heuristic: the largest file can still be an extra.
 
 For each candidate, `Send this file? [Y/n]` accepts Enter, Y, or Yes to approve
 (case insensitive). N or No offers the next candidate in that movie folder.
-Invalid input repeats the prompt; rejecting every candidate skips the movie.
+Invalid input repeats the prompt; rejecting every candidate skips the movie
+once and continues. Declining a loose MKV skips just that movie.
 After the first approval, no more candidates are offered for that folder, even
 if that transfer fails or conflicts. At most one file per movie is selected per
 run. EOF (Ctrl-D) stops the batch with nonzero status and never approves a file;

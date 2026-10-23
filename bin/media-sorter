@@ -78,14 +78,29 @@ remote "test -d $(quote "$DEST") && test -w $(quote "$DEST")" || die 'Remote des
 # Snapshot each enumeration and check find before consuming any partial output.
 scan_dir=$(mktemp -d "${TMPDIR:-/tmp}/media-sorter.XXXXXX") || die 'Cannot create scan workspace.'
 trap 'rm -rf -- "$scan_dir"' EXIT
-if ! find "$SOURCE" -mindepth 1 -maxdepth 1 -type d -print0 > "$scan_dir/folders"; then
+if ! find "$SOURCE" -mindepth 1 -maxdepth 1 \( -type d -o \( -type f -iname '*.mkv' \) \) -print0 > "$scan_dir/entries"; then
     printf 'Error: cannot scan source: %q\n' "$SOURCE" >&2
     failed=$((failed+1)); summary; exit 1
 fi
-while IFS= read -r -d '' folder; do
-    if ! find "$folder" -maxdepth 1 -type f -iname '*.mkv' -print0 > "$scan_dir/files"; then
-        printf 'Error: cannot scan movie folder: %q\n' "$folder" >&2
+while IFS= read -r -d '' entry; do
+    movie_name=${entry##*/}
+    label='Movie folder'
+    if [ -L "$entry" ]; then
+        printf 'Error: source entry became a symlink: %q\n' "$entry" >&2
         failed=$((failed+1)); continue
+    elif [ -d "$entry" ]; then
+        if ! find "$entry" -maxdepth 1 -type f -iname '*.mkv' -print0 > "$scan_dir/files"; then
+            printf 'Error: cannot scan movie folder: %q\n' "$entry" >&2
+            failed=$((failed+1)); continue
+        fi
+    else
+        label='Loose movie'
+        movie_name=${movie_name%.*}
+        case "$movie_name" in
+            ''|.|..) printf 'Error: loose movie needs a usable filename before .mkv: %q\n' "$entry" >&2
+                failed=$((failed+1)); continue;;
+        esac
+        printf '%s\0' "$entry" > "$scan_dir/files" || die 'Cannot prepare candidate scan.'
     fi
     files=(); sizes=()
     while IFS= read -r -d '' file; do
@@ -105,7 +120,8 @@ while IFS= read -r -d '' folder; do
         sizes[i]=$size
     done < "$scan_dir/files"
     [ "${#files[@]}" -gt 0 ] || continue
-    printf '\nMovie folder: %q\n' "${folder##*/}"
+    printf '\n%s: %q\n' "$label" "${entry##*/}"
+    printf 'Destination folder: %q\n' "$movie_name"
     selected=0
     i=0
     for file in "${files[@]}"; do
@@ -128,7 +144,7 @@ while IFS= read -r -d '' folder; do
     [ "$selected" -eq 1 ] || { skipped=$((skipped+1)); continue; }
     printf 'Selected: %q\n' "$file"
     approved=$((approved+1))
-    target_dir=${DEST%/}/${folder##*/}; target=$target_dir/${file##*/}
+    target_dir=${DEST%/}/$movie_name; target=$target_dir/${file##*/}
     remote "test ! -e $(quote "$target") && test ! -L $(quote "$target")"
     status=$?
     if [ "$status" -eq 1 ]; then printf 'Conflict: %q\n' "$target"; conflicted=$((conflicted+1)); continue; fi
@@ -146,6 +162,6 @@ while IFS= read -r -d '' folder; do
         failed=$((failed+1))
     fi
     remote "rm -f -- $(quote "$stage/payload") && rmdir -- $(quote "$stage")" || printf 'Warning: staging cleanup failed: %q\n' "$stage" >&2
-done < "$scan_dir/folders"
+done < "$scan_dir/entries"
 summary
 [ "$failed" -eq 0 ]
