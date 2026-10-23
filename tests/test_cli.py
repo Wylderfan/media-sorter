@@ -56,12 +56,13 @@ cp -- "$src" "${dst#*:}"
         self.env = dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}', MEDIA_SORTER_CONFIG=str(self.config),
                         SSH_LOG=str(self.root / 'ssh.log'), RSYNC_LOG=str(self.root / 'rsync.log'))
 
-    def run_cli(self, *args, approval=True, responses=None, choice=None):
+    def run_cli(self, *args, approval=True, responses=None, answers=None):
         master, slave = pty.openpty()
         proc = subprocess.Popen([os.environ.get("MEDIA_SORTER_TEST_BASH", "/bin/bash"), str(CLI), *args], stdin=slave, stdout=slave, stderr=slave, env=self.env)
         os.close(slave)
         output = b''
-        choices = approvals = 0
+        approvals = 0
+        replies = iter(answers) if answers is not None and not callable(answers) else None
         pending = list(responses or [])
         try:
             while True:
@@ -77,16 +78,12 @@ cp -- "$src" "${dst#*:}"
                     if pending and pending[0][0] in text:
                         _, response = pending.pop(0)
                         os.write(master, (response + '\n').encode())
-                    if text.count('Choose a file number') > choices:
-                        # find output order rather than assuming filesystem enumeration order
-                        menu = text.rsplit('Movie folder:', 1)[-1]
-                        number = re.search(r'(\d+): .*\(largest;', menu).group(1)
-                        if choice is not None:
-                            number = choice(menu) if callable(choice) else choice
-                        os.write(master, (number + '\n').encode())
-                        choices += 1
-                    if text.count('Type yes:') > approvals:
-                        os.write(master, b'yes\n' if approval else b'\n')
+                    if text.count('[Y/n] ') > approvals:
+                        candidate = text.rsplit('Candidate:', 1)[-1]
+                        response = answers(candidate) if callable(answers) else (
+                            next(replies) if replies is not None else ('' if approval else 'n'))
+                        # None sends terminal EOF, not an empty line (Enter).
+                        os.write(master, b'\x04' if response is None else (response + '\n').encode())
                         approvals += 1
                 else:
                     proc.kill()
@@ -107,13 +104,14 @@ cp -- "$src" "${dst#*:}"
     def test_transfer_and_collision(self):
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
-        target = self.dest / self.movie.name / "main's $film.mkv"
+        target = self.dest / "main's $film.mkv"
         self.assertEqual(target.read_bytes(), b'movie' * 100)
         self.assertEqual(len(list(target.parent.iterdir())), 1)
         self.assertTrue((self.movie / target.name).exists())
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
         self.assertIn('conflicted=1', output)
+        self.assertEqual(output.count('[Y/n] '), 1)
         self.assertFalse((self.root / 'BAD').exists())
 
     def test_skip(self):
@@ -133,8 +131,9 @@ cp -- "$src" "${dst#*:}"
         status, output = self.run_cli('movies', '--apply')
         self.assertNotEqual(status, 0, output)
         self.assertIn('failed=1', output)
-        self.assertFalse((self.dest / self.movie.name / "main's $film.mkv").exists())
-        self.assertEqual(list((self.dest / self.movie.name).iterdir()), [])
+        self.assertEqual(output.count('[Y/n] '), 1)
+        self.assertFalse((self.dest / "main's $film.mkv").exists())
+        self.assertEqual(list(self.dest.iterdir()), [])
 
     def test_unavailable_host(self):
         self.env['FAIL_SSH'] = 'yes'
@@ -184,7 +183,7 @@ cp -- "$src" "${dst#*:}"
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
         self.assertIn('transferred=1', output)
-        target = self.dest / self.movie.name / "main's $film.mkv"
+        target = self.dest / "main's $film.mkv"
         self.assertEqual(target.read_bytes(), (self.movie / target.name).read_bytes())
 
     def test_all_top_level_candidates_remain_selectable(self):
@@ -195,11 +194,11 @@ cp -- "$src" "${dst#*:}"
                 def select_title(menu):
                     # Match Bash %q output for the known title.
                     escaped = name.replace(' ', r'\ ').replace('(', r'\(').replace(')', r'\)')
-                    return re.search(r'(\d+): ' + re.escape(escaped), menu).group(1)
-                status, output = self.run_cli('movies', '--apply', choice=select_title)
+                    return '' if menu.lstrip().startswith(escaped + ' (') else 'n'
+                status, output = self.run_cli('movies', '--apply', answers=select_title)
                 self.assertEqual(status, 0, output)
-                self.assertEqual((self.dest / self.movie.name / name).read_bytes(), b'title')
-                self.assertFalse((self.dest / self.movie.name / 'extras').exists())
+                self.assertEqual((self.dest / name).read_bytes(), b'title')
+                self.assertFalse((self.dest / 'extras').exists())
                 candidate.unlink()
 
     def test_multiple_movies_and_candidates(self):
@@ -210,18 +209,134 @@ cp -- "$src" "${dst#*:}"
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
         self.assertIn('transferred=2', output)
-        self.assertEqual((self.dest / second.name / 'large.mkv').read_bytes(), b'xx')
+        self.assertEqual((self.dest / 'large.mkv').read_bytes(), b'xx')
 
-    def test_choice_edge_cases(self):
-        for choice in ['', '0', '999999', '1000000', '-1', 'abc', '1+1']:
-            with self.subTest(choice=choice):
-                status, output = self.run_cli('movies', '--apply', choice=choice)
-                self.assertEqual(status, 0, output)
-                self.assertIn('skipped=1', output)
-                self.assertEqual(list(self.dest.iterdir()), [])
-        status, output = self.run_cli('movies', choice=lambda menu: '00' + re.search(r'(\d+): .*\(largest;', menu).group(1))
+    def test_no_then_enter_selects_next_largest_only(self):
+        (self.movie / 'middle.mkv').write_bytes(b'x' * 20)
+        status, output = self.run_cli('movies', '--apply', answers=['N', ''])
         self.assertEqual(status, 0, output)
+        self.assertEqual(re.findall(r'Candidate: .*?\((\d+) bytes;', output), ['500', '20'])
+        self.assertIn('transferred=1', output)
+        self.assertEqual([p.name for p in self.dest.iterdir()], ['middle.mkv'])
+
+    def test_largest_first_and_exhaustion(self):
+        (self.movie / 'middle.mkv').write_bytes(b'x' * 20)
+        (self.movie / 'zero.mkv').touch()
+        status, output = self.run_cli('movies', '--apply', approval=False)
+        self.assertEqual(status, 0, output)
+        self.assertEqual(re.findall(r'Candidate: .*?\((\d+) bytes;', output), ['500', '20', '5', '0'])
+        self.assertIn('skipped=1', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+
+    def test_declining_folder_counts_once_and_continues(self):
+        second = self.source / 'Healthy'
+        second.mkdir()
+        (second / 'accepted.mkv').write_bytes(b'movie')
+        status, output = self.run_cli('movies', '--apply',
+                                      answers=lambda candidate: '' if 'accepted.mkv' in candidate else 'n')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=1 skipped=1', output)
         self.assertIn('approved=1', output)
+        self.assertFalse((self.dest / self.movie.name).exists())
+        self.assertEqual((self.dest / 'accepted.mkv').read_bytes(), b'movie')
+
+    def test_case_insensitive_responses_and_invalid_reprompt(self):
+        for yes in ['y', 'Y', 'yes', 'YeS', 'YES']:
+            status, output = self.run_cli('movies', answers=['invalid', '1', yes])
+            self.assertEqual(status, 0, output)
+            self.assertEqual(output.count('Candidate:'), 1)
+            self.assertEqual(output.count('Please enter Y or N'), 2)
+            self.assertIn('approved=1', output)
+        for no in ['n', 'N', 'no', 'No', 'NO']:
+            status, output = self.run_cli('movies', answers=[no, no])
+            self.assertEqual(status, 0, output)
+            self.assertIn('skipped=1', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+
+    def test_eof_stops_without_approval_or_transfer(self):
+        second = self.source / 'Another movie'
+        second.mkdir()
+        (second / 'main.mkv').write_bytes(b'movie')
+        (second / 'other.mkv').write_bytes(b'other')
+        for answers in [[None], ['invalid', None], ['n', None]]:
+            status, output = self.run_cli('movies', '--apply', answers=answers)
+            self.assertNotEqual(status, 0, output)
+            self.assertIn('Input ended', output)
+            self.assertIn('approved=0', output)
+            self.assertEqual(output.count('Movie folder:'), 1)
+            self.assertEqual(list(self.dest.iterdir()), [])
+
+    def test_mixed_layout_multiple_loose_movies_and_conflicts(self):
+        loose_names = ["Loose's $(touch BAD) (2020).mkv", 'Another.Movie.MKV']
+        for name in loose_names:
+            (self.source / name).write_bytes(b'loose')
+        outside = self.root / 'outside'
+        outside.mkdir()
+        (outside / 'hidden.mkv').write_bytes(b'hidden')
+        (self.source / 'linked-folder').symlink_to(outside, target_is_directory=True)
+        (self.source / 'linked.mkv').symlink_to(outside / 'hidden.mkv')
+        (self.source / 'notes.txt').write_text('ignore')
+        status, output = self.run_cli('movies')
+        self.assertEqual(status, 0, output)
+        self.assertIn('approved=3', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=3', output)
+        self.assertEqual(output.count('[Y/n] '), 3)
+        self.assertEqual(len(list(self.dest.iterdir())), 3)
+        for name in loose_names:
+            self.assertEqual((self.dest / name).read_bytes(), b'loose')
+            self.assertEqual((self.source / name).read_bytes(), b'loose')
+        self.assertFalse((self.root / 'BAD').exists())
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('conflicted=3', output)
+        self.assertEqual(output.count('[Y/n] '), 3)
+
+    def test_decline_loose_movie_and_folder_continue_independently(self):
+        (self.source / 'declined.mkv').write_bytes(b'no')
+        (self.source / 'accepted.mkv').write_bytes(b'yes')
+        status, output = self.run_cli('movies', '--apply',
+                                      answers=lambda candidate: '' if 'accepted.mkv' in candidate else 'n')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=1 skipped=2', output)
+        self.assertEqual([p.name for p in self.dest.iterdir()], ['accepted.mkv'])
+        self.assertEqual((self.dest / 'accepted.mkv').read_bytes(), b'yes')
+
+    def test_same_basename_across_folders_and_loose_file_conflicts(self):
+        shutil.rmtree(self.movie)
+        originals = [self.source / 'same.mkv']
+        for folder in ['First movie', 'Second movie']:
+            directory = self.source / folder
+            directory.mkdir()
+            originals.append(directory / 'same.mkv')
+            (directory / 'alternate.mkv').write_bytes(b'x')
+        for i, source in enumerate(originals):
+            source.write_bytes(('original-' + str(i)).encode())
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=1 skipped=0 conflicted=2', output)
+        self.assertEqual(output.count('[Y/n] '), 3)
+        self.assertEqual([p.name for p in self.dest.iterdir()], ['same.mkv'])
+        winner = (self.dest / 'same.mkv').read_bytes()
+        self.assertIn(winner, [p.read_bytes() for p in originals])
+        for i, source in enumerate(originals):
+            self.assertEqual(source.read_bytes(), ('original-' + str(i)).encode())
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=0 skipped=0 conflicted=3', output)
+        self.assertEqual((self.dest / 'same.mkv').read_bytes(), winner)
+
+    def test_flat_destination_display(self):
+        shutil.rmtree(self.movie)
+        (self.source / 'plain.mkv').write_bytes(b'movie')
+        status, output = self.run_cli('movies')
+        self.assertEqual(status, 0, output)
+        destination_line = next(line for line in output.splitlines() if line.startswith('Destination:'))
+        self.assertTrue(destination_line.endswith('/plain.mkv'), output)
+        self.assertNotIn('/plain/plain.mkv', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
 
     def test_scan_failures_discard_partial_results(self):
         real_find = shutil.which('find')

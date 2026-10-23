@@ -1,6 +1,6 @@
 # media-sorter
 
-A manually invoked movies-only Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
+A manually invoked movies-only Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie or a loose top-level MKV, and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
 
 ## Running the MVP
 
@@ -27,18 +27,38 @@ They are never executed as shell code. Setup requires a terminal and explicit
 `yes` before saving; `--source` does not rewrite saved settings. Paths must be
 absolute and settings cannot contain newlines. No passwords are stored.
 
-The source layout is `Movies/Movie Title (Year)/chosen-file.mkv`; destination
-layout preserves `Movie Title (Year)/chosen-file.mkv`. Only immediate movie
-folders and their immediate MKVs are candidates. Nested files (including bonus
+The source can contain movie folders such as `Movies/Movie Title (Year)/chosen-file.mkv`
+or loose files such as `Movies/Some Title.mkv`. Both send the approved file directly
+into the configured destination: `DEST/chosen-file.mkv` or `DEST/Some Title.mkv`.
+Original filenames are preserved; no movie-name destination folders are created.
+The exact destination file path is displayed before approval. Files with the same
+basename from different source folders or loose files share a destination path:
+the first successful publication wins and later collisions are reported and skipped,
+without overwriting or trying another candidate from an already approved folder.
+No title/year metadata or filenames are inferred.
+Each loose MKV gets its own approval; the one-file limit applies per actual
+movie subfolder, not to the entire Movies root. Non-MKV root files and symlinks
+are ignored. Only immediate movie folders and their immediate MKVs are candidates. Nested files (including bonus
 content) are ignored. Every immediate MKV remains
 selectable, including names such as `Extra Ordinary (2019).mkv`, `bonus.mkv`, or
-`sample.mkv`. The largest file is merely a suggestion, even if it is an extra. Choose
-a number and type `yes` to approve; empty or invalid input skips the movie.
+`sample.mkv`. Candidates are offered largest first, showing filename and size in
+bytes. Size is only a heuristic: the largest file can still be an extra.
+
+For each candidate, `Send this file? [Y/n]` accepts Enter, Y, or Yes to approve
+(case insensitive). N or No offers the next candidate in that movie folder.
+Invalid input repeats the prompt; rejecting every candidate skips the movie
+once and continues. Declining a loose MKV skips just that movie.
+After the first approval, no more candidates are offered for that folder, even
+if that transfer fails or conflicts. At most one file per movie is selected per
+run. EOF (Ctrl-D) stops the batch with nonzero status and never approves a file;
+any earlier completed transfers remain. Preview uses `Preview this file? [Y/n]`
+and makes no remote library changes. `--apply` is still required to send files.
 Review carefully: titles and main-feature identity are not inferred or verified.
 
 Preview checks connectivity, capabilities, destination access, and collisions
 without writing remote library files. Apply stages one approved file at a time
-in a unique hidden directory inside its movie folder. An atomic hard link
+in a unique hidden `.media-sorter-*` directory directly inside the configured
+destination. This temporary staging directory is removed after ordinary completion. An atomic hard link
 publishes the finished file without replacing an existing final path; this
 requires hard-link support on the destination filesystem. Staging data is cleaned
 up after ordinary completion or failure. Abrupt interruption can leave a hidden
@@ -72,6 +92,7 @@ Tests do not establish real SSH connectivity or access to your server.
 ## Remaining work and limits
 
 This is a small MVP. TV/both commands are rejected. Duration-based suggestions,
-TV identification and ordering, and real Mac-to-Linux SSH validation remain future
-work. The destination must support hard links; publication does not overwrite
+TV identification and ordering remain future work. A user has reported a
+successful Mac-to-Linux test; automated checks use local fixtures, not a real
+server. The destination must support hard links; publication does not overwrite
 existing files. Interruptions may leave staging data as described above.
