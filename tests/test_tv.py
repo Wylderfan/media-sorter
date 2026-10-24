@@ -189,6 +189,35 @@ if [ "$1" != --help ]; then
         self.assertIn('--progress', options)
         self.assertIn('--rsync-path=env LC_ALL=C LANG=C rsync', options)
 
+    def test_remember_identity_after_decline_but_never_between_runs(self):
+        self.prepare('flat', '', "A Bob's Burgers (2011) Season 1 S01 (1080p )")
+        self.prepare('flat', '', "B Bob's Burgers (2011) Season 2 S02 (1080p )")
+        before = self.tvconfig.read_bytes()
+        status, output = self.run_cli('tv', '--apply',
+            responses=self.prompts("Bob's Burgers (2011)", '1') + [
+                ("Show name (optional year), confirm/correct [Bob's Burgers (2011)]", ''),
+                ('Season number, confirm/correct [2]', '')],
+            answers=['n', ''])
+        self.assertEqual(status, 0, output)
+        self.assertIn("confirm/correct [Bob's Burgers (2011)]", output)
+        self.assertIn('confirm/correct [2]', output)
+        self.assertIn('not inferred from this folder', output)
+        self.assertIn('transferred=1 skipped=1', output)
+        target = self.dest / "Bob's Burgers (2011)"
+        self.assertFalse((target / 'Season 01').exists())
+        self.assertTrue((target / 'Season 02').is_dir())
+        self.assertEqual(self.tvconfig.read_bytes(), before)
+        status, output = self.run_cli('tv', responses=self.prompts('Fresh', '7') + [
+            ('Show name (optional year), confirm/correct [Fresh]', ''),
+            ('Season number, confirm/correct [8]', '')], approval=False)
+        self.assertEqual(status, 0, output)
+        self.assertIn('Show name (optional year), confirm/correct []', output)
+        self.assertIn('Season number, confirm/correct []', output)
+        self.assertIn('confirm/correct [Fresh]', output)
+        self.assertIn('confirm/correct [8]', output)
+        self.assertNotIn('confirm/correct [Bob', output)
+        self.assertEqual(self.tvconfig.read_bytes(), before)
+
     def test_multiple_seasons_and_shows(self):
         self.prepare(name='Alpha')
         self.prepare(name='Alpha', season='Season 02')

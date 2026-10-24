@@ -164,7 +164,29 @@ symlink or special file is rejected in full, not silently copied in part.
 
 The parent show directory or the show prefix in a season directory supplies a
 suggestion. **Every show and season suggestion must be confirmed or corrected**;
-blank/unknown identities require entry, and a year is never invented. Enter a
+blank identities without a fallback require entry, and a year is never invented.
+Within one invocation only, an unrecognized show defaults to the last confirmed
+show. After you confirm the show, an unrecognized season defaults to the last
+confirmed season plus one **only if the show matches exactly**. These fallbacks
+are explicitly labeled editable suggestions, not inferred metadata. Recognized
+current folder show/season values take precedence. Enter accepts the displayed
+suggestion; typing replaces it. Changing to a different show requires a season
+number unless the current folder supplies one. Returning to an earlier show does
+not restore older history: only the immediately previous identity is remembered.
+
+Memory updates after **both** identity prompts have valid confirmed values, before
+the transfer Y/n prompt. Declining a season's transfer still remembers its confirmed
+identity, so the next unlabeled season can suggest the next number. Invalid input
+and an incomplete/EOF identity never update memory. Season 00 increments to 01;
+after 99 there is no increment suggestion (enter a number from 0 to 99). Selection
+EOF cancels the batch as before. No values persist in config or survive a new run;
+folder traversal order is unchanged, so always review the suggested sequence.
+
+For example, for `Bob's Burgers (2011) Season 1 S01 (1080p )`, enter
+`Bob's Burgers (2011)` and `1` once. On the next unrecognized folder in that run,
+the prompts suggest that show and season `2`; accept with Enter or correct them.
+Start with `./bin/media-sorter tv` to review these defaults in preview before using
+`--apply`. Enter a
 show name with its year when known, or without a year. Season numbers 0–99 are
 accepted (0 permits explicitly supplied specials). The complete target is
 `TV_DEST/Show Name (Year)/Season NN/`, with the year omitted when absent. Before

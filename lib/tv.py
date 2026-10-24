@@ -110,9 +110,12 @@ def discover(root):
                     print('Ignoring non-directory:', display_path(child))
 
 
-def identity(path, context):
+def identity(path, context, previous=None):
     match = SEASON.fullmatch(path.name)
     suggestion = context or (match.group(1) if match else '') or ''
+    if not suggestion and previous is not None:
+        suggestion = previous[0]
+        print('Show suggestion: last confirmed show in this run (editable).')
     # Every suggestion is explicitly confirmed; ambiguous/release names are not parsed.
     while True:
         show = ask('Show name (optional year), confirm/correct [' + display_path(suggestion) + ']: ').strip() or suggestion
@@ -120,6 +123,11 @@ def identity(path, context):
             break
         print('Enter a show name; no identity can be inferred.')
     number = match.group(2) if match else ''
+    if not number and previous is not None and show == previous[0]:
+        last_number = int(previous[1].split()[-1])
+        if last_number < 99:
+            number = str(last_number + 1)
+            print('Season suggestion: last confirmed season + 1 (editable; not inferred from this folder).')
     while True:
         value = ask('Season number, confirm/correct [' + number + ']: ').strip() or number
         if re.fullmatch(r'[0-9]{1,2}', value):
@@ -190,6 +198,7 @@ def main():
     try:
         print('Selection phase: approve all seasons before any transfers.')
         queue = []
+        previous = None  # Invocation-local, updated only after both identity prompts succeed.
         candidates = list(discover(root))
         for path, context in candidates:
             try:
@@ -199,7 +208,8 @@ def main():
                     counts['skipped'] += 1
                     continue
                 print('\nSeason directory:', display_path(path))
-                show, season = identity(path, context)
+                show, season = identity(path, context, previous)
+                previous = (show, season)
                 print('Destination:', display_path(dest + '/' + show + '/' + season + '/'))
                 print('Contents: %d files' % sum(stat.S_ISREG(v[0]) for v in before.values()))
                 print('Season size:', display_size(sum(v[1] for v in before.values() if stat.S_ISREG(v[0]))))
