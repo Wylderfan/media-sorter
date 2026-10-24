@@ -1,6 +1,6 @@
 # media-sorter
 
-A manually invoked movies-only Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie or a loose top-level MKV, and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
+A manually invoked movies-only Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie or a loose top-level MKV or MP4, and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
 
 ## Running the MVP
 
@@ -36,18 +36,20 @@ basename from different source folders or loose files share a destination path:
 the first successful publication wins and later collisions are reported and skipped,
 without overwriting or trying another candidate from an already approved folder.
 No title/year metadata or filenames are inferred.
-Each loose MKV gets its own approval; the one-file limit applies per actual
-movie subfolder, not to the entire Movies root. Non-MKV root files and symlinks
-are ignored. Only immediate movie folders and their immediate MKVs are candidates. Nested files (including bonus
-content) are ignored. Every immediate MKV remains
+Both `.mkv` and `.mp4` are supported, case insensitively, in movie folders and
+as loose root files. Files are copied as-is without conversion.
+Each loose movie file gets its own approval; the one-file limit applies per actual
+movie subfolder, not to the entire Movies root. Other root files and symlinks
+are ignored. Only immediate movie folders and their immediate MKV/MP4 files are candidates. Nested files (including bonus
+content) are ignored. Every immediate MKV/MP4 remains
 selectable, including names such as `Extra Ordinary (2019).mkv`, `bonus.mkv`, or
-`sample.mkv`. Candidates are offered largest first, showing filename and size in
+`sample.mkv`. Candidates across both formats are offered largest first, showing filename and size in
 bytes. Size is only a heuristic: the largest file can still be an extra.
 
 For each candidate, `Send this file? [Y/n]` accepts Enter, Y, or Yes to approve
 (case insensitive). N or No offers the next candidate in that movie folder.
 Invalid input repeats the prompt; rejecting every candidate skips the movie
-once and continues. Declining a loose MKV skips just that movie.
+once and continues. Declining a loose movie file skips just that movie.
 After the first approval, no more candidates are offered for that folder, even
 if that transfer fails or conflicts. At most one file per movie is selected per
 run. EOF (Ctrl-D) stops the batch with nonzero status and never approves a file;
@@ -84,7 +86,7 @@ remote-shell fixture; otherwise that test is explicitly skipped. CI installs
 rsync and runs this test as well on Ubuntu and macOS. The macOS job
 explicitly runs the CLI with Apple's `/bin/bash` (3.2); local remote-command
 fixtures simulate the Linux destination, including GNU `ln -T`.
-Coverage includes multiple movies and candidates, movie-title selection, nested
+Coverage includes mixed-case MKV/MP4 discovery and ranking, multiple movies and candidates, movie-title selection, nested
 bonus exclusion, scan failures, input edge cases, transport options, preview,
 source retention, collisions, unusual paths, and failed transfers.
 Tests do not establish real SSH connectivity or access to your server.
