@@ -28,6 +28,16 @@ display_path() {
         printf '%s' "$1"
     fi
 }
+# Decimal GB, rounded to two places with locale-independent integer arithmetic.
+display_size() {
+    local bytes=$1 hundredths
+    if [ "$bytes" -gt 0 ] && [ "$bytes" -lt 10000000 ]; then
+        printf '<0.01 GB'
+    else
+        hundredths=$(((bytes+5000000)/10000000))
+        printf '%d.%02d GB' "$((hundredths/100))" "$((hundredths%100))"
+    fi
+}
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 summary() { printf 'Summary: transferred=%d skipped=%d conflicted=%d failed=%d approved=%d\n' "$transferred" "$skipped" "$conflicted" "$failed" "$approved"; }
 ask() { [ -t 3 ] || return 1; printf '%s' "$1" >&2; IFS= read -r REPLY <&3; }
@@ -132,7 +142,7 @@ while IFS= read -r -d '' entry; do
     selected=0
     i=0
     for file in "${files[@]}"; do
-        printf 'Candidate: %s (%d bytes; size is a suggestion only)\n' "$(display_path "${file##*/}")" "${sizes[i]}"
+        printf 'Candidate: %s (%s; size is a suggestion only)\n' "$(display_path "${file##*/}")" "$(display_size "${sizes[i]}")"
         target=${DEST%/}/${file##*/}
         printf 'Destination: %s\n' "$(display_path "$target")"
         i=$((i+1))

@@ -47,8 +47,10 @@ movie subfolder, not to the entire Movies root. Other root files and symlinks
 are ignored. Only immediate movie folders and their immediate MKV/MP4 files are candidates. Nested files (including bonus
 content) are ignored. Every immediate MKV/MP4 remains
 selectable, including names such as `Extra Ordinary (2019).mkv`, `bonus.mkv`, or
-`sample.mkv`. Candidates across both formats are offered largest first, showing filename and size in
-bytes. Size is only a heuristic: the largest file can still be an extra.
+`sample.mkv`. Candidates across both formats are offered largest first, showing filename and decimal GB
+(1 GB = 1,000,000,000 bytes), rounded to two decimal places. For example,
+4,287,390,252 bytes displays as `4.29 GB`. Nonempty files below 0.01 GB show
+`<0.01 GB`; empty files show `0.00 GB`. Sorting always uses exact byte counts. Size is only a heuristic: the largest file can still be an extra.
 
 For each candidate, `Send this file? [Y/n]` accepts Enter, Y, or Yes to approve
 (case insensitive). N or No offers the next candidate in that movie folder.
