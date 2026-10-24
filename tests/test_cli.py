@@ -38,7 +38,7 @@ printf '%s\\n' "$*" >> "$SSH_LOG"
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -n) shift;;
-        -o) shift 2;;
+        -o|-l|-p) shift 2;;
         *) shift; break;; # destination host
     esac
 done
