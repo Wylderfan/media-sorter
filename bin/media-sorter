@@ -6,6 +6,8 @@ export LC_ALL=C LANG=C
 set -uo pipefail
 exec 3<&0
 CONFIG=${MEDIA_SORTER_CONFIG:-${HOME}/.config/media-sorter/config}
+CONFIG_BASE=$CONFIG
+[ ! -f "${CONFIG_BASE}.movies" ] || CONFIG=${CONFIG_BASE}.movies
 SOURCE='' SERVER='' USER_NAME='' DEST=''
 APPLY=0
 transferred=0 skipped=0 conflicted=0 failed=0 approved=0
@@ -49,12 +51,44 @@ valid() {
     [[ "$USER_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || return 1
     [ -d "$SOURCE" ] && [ -r "$SOURCE" ]
 }
+profile_review() {
+    printf 'Media: movies\nConfiguration: %s\nLocal source: %s\nRemote library: %s@%s:%s\n' "$(display_path "$CONFIG")" "$(display_path "$SOURCE")" "$USER_NAME" "$SERVER" "$(display_path "$DEST")"
+}
+# Reject overlapping configured libraries on the same SSH endpoint. Aliases
+# cannot prove server identity; the operator still reviews the explicit paths.
+overlap() {
+    local left=${1%/} right=${2%/}
+    [ "$left" = "$right" ] || [[ "$left/" == "$right/"* ]] || [[ "$right/" == "$left/"* ]]
+}
+check_tv_separation() {
+    local tv_source tv_server _tv_user tv_dest
+    [ -f "${CONFIG_BASE}.tv" ] || return 0
+    { IFS= read -r tv_source && IFS= read -r tv_server && IFS= read -r _tv_user && IFS= read -r tv_dest; } < "${CONFIG_BASE}.tv" || die 'Invalid TV configuration; cannot check library separation.'
+    overlap "$SOURCE" "$tv_source" && die 'Movie and TV source roots overlap; choose independent roots.'
+    if [ "$SERVER" = "$tv_server" ]; then
+        overlap "$DEST" "$tv_dest" && die 'Movie and TV destination roots overlap; choose independent libraries.'
+    fi
+    return 0
+}
 configure() {
-    ask 'Absolute Movies source: ' || die 'Setup cancelled; interactive input required.'; SOURCE=$REPLY
-    ask 'Server hostname or SSH alias: ' || die 'Setup cancelled.'; SERVER=$REPLY
-    ask 'SSH username: ' || die 'Setup cancelled.'; USER_NAME=$REPLY
-    ask 'Absolute Movies destination: ' || die 'Setup cancelled.'; DEST=$REPLY
+    local previous=$CONFIG
+    # Explicit configure movies can start from legacy values, without changing
+    # the legacy file. Blank answers retain displayed values.
+    [ -f "$previous" ] || previous=$CONFIG_BASE
+    if [ -f "$previous" ]; then
+        { IFS= read -r SOURCE && IFS= read -r SERVER && IFS= read -r USER_NAME && IFS= read -r DEST; } < "$previous" || die 'Invalid existing configuration; repair it before setup.'
+    fi
+    ask "Absolute Movies source: [$(display_path "$SOURCE")] " || die 'Setup cancelled; interactive input required.'; SOURCE=${REPLY:-$SOURCE}
+    ask "Server hostname or SSH alias: [$SERVER] " || die 'Setup cancelled.'; SERVER=${REPLY:-$SERVER}
+    ask "SSH username: [$USER_NAME] " || die 'Setup cancelled.'; USER_NAME=${REPLY:-$USER_NAME}
+    ask "Absolute Movies destination: [$(display_path "$DEST")] " || die 'Setup cancelled.'; DEST=${REPLY:-$DEST}
     valid || die 'Invalid settings; source must be a readable absolute directory, destination absolute, and host/user valid.'
+    for path in "$SOURCE" "$DEST"; do
+        case "$path" in /|*//*|*/../*|*/./*|*/..|*/.) die 'Choose a non-root path without traversal or repeated separators.';; esac
+    done
+    check_tv_separation
+    profile_review
+    printf 'This is the MOVIES library. Setup does not contact the server.\n'
     ask 'Save settings? [yes/no] ' || die 'Setup cancelled.'
     [ "$REPLY" = yes ] || die 'Setup cancelled.'
     mkdir -p -- "$(dirname -- "$CONFIG")" || die 'Cannot create configuration directory.'
@@ -71,11 +105,18 @@ load() {
 SSH_TRANSPORT=(ssh -o BatchMode=yes -o ConnectTimeout=10)
 remote() { "${SSH_TRANSPORT[@]}" -n "$USER_NAME@$SERVER" "export LC_ALL=C LANG=C; $1"; }
 help() {
-    printf '%s\n' 'Usage: media-sorter configure | movies [--source /path] [--apply] | tv [--source /path] [--apply] | configure-tv | --help' 'Movies accepts MKV and MP4 (case insensitive) and previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. TV additionally requires Python 3 locally/remotely and Linux renameat2.'
+    printf '%s\n' 'Usage: media-sorter configure [movies|tv] | movies [--source /path] [--apply] | tv [--source /path] [--apply] | configure-tv | --help' 'Movies accepts MKV and MP4 (case insensitive) and previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. TV additionally requires Python 3 locally/remotely and Linux renameat2.'
 }
 case "${1:---help}" in
     --help|-h) help; exit 0;;
-    configure) [ "$#" -eq 1 ] || die 'configure takes no arguments.'; configure; exit 0;;
+    configure)
+        case "${2:-}" in
+            '') [ "$#" -eq 1 ] || die 'Use configure [movies|tv].';;
+            movies) [ "$#" -eq 2 ] || die 'Use configure movies.'; CONFIG=${CONFIG_BASE}.movies;;
+            tv) [ "$#" -eq 2 ] || die 'Use configure tv.'; exec python3 "$(dirname -- "$0")/../lib/tv.py" configure-tv;;
+            *) die 'Supported configuration profiles: movies, tv. Music transfer is not implemented.';;
+        esac
+        configure; exit 0;;
     tv|configure-tv) exec python3 "$(dirname -- "$0")/../lib/tv.py" "$@";;
     movies) shift;;
     *) die 'Unsupported command; use movies, configure, or --help. both is not supported.';;
@@ -92,6 +133,8 @@ trap 'printf "Interrupted; originals retained. Hidden staging files may need cle
 load
 [ -z "$override" ] || SOURCE=$override
 valid || die 'Invalid settings or unavailable source; run configure.'
+check_tv_separation
+profile_review
 [ -t 3 ] || die 'Interactive input is required for per-file approval; nothing transferred.'
 command -v rsync >/dev/null || die 'Install rsync 3.x (on macOS: brew install rsync).'
 rsync --help | grep -e --protect-args -e --secluded-args >/dev/null || die 'Local rsync must support --protect-args; install rsync 3.x.'

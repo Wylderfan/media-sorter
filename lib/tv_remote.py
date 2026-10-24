@@ -37,6 +37,8 @@ def rename_new(source, target):
 def main():
     action, root, show, season, stage = json.loads(sys.argv[1])
     directory(root)
+    if not os.access(root, os.W_OK):
+        raise PermissionError('TV destination must be writable.')
     for name in (show, season):
         if not name or name in ('.', '..') or '/' in name or any(ord(c) < 32 or ord(c) == 127 for c in name):
             raise ValueError('Unsafe component')

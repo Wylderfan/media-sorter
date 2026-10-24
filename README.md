@@ -21,8 +21,11 @@ verify the host through ordinary SSH first. Both preflight and transfer use
 `BatchMode=yes` and a 10-second connection timeout, preserving SSH's host-key
 policy. The CLI does not install or configure Tailscale.
 
-Settings are four plain text lines (source, server, username, destination) at
-`~/.config/media-sorter/config`. `MEDIA_SORTER_CONFIG` overrides that location.
+Settings are four plain text lines (source, server, username, destination) per
+media profile. `MEDIA_SORTER_CONFIG` selects the base path, defaulting to
+`~/.config/media-sorter/config`. Movies uses `config.movies` when it exists,
+otherwise the original `config` file. TV uses only `config.tv`. See configuration
+and compatibility below.
 They are never executed as shell code. Setup requires a terminal and explicit
 `yes` before saving; `--source` does not rewrite saved settings. Paths must be
 absolute and settings cannot contain newlines. No passwords are stored.
@@ -138,8 +141,8 @@ existing files. Interruptions may leave staging data as described above.
 ./bin/media-sorter tv --apply               # still asks for each season
 ```
 
-TV uses a separate four-line file at `${MEDIA_SORTER_CONFIG}.tv`, or
-`~/.config/media-sorter/config.tv` by default. Run `configure-tv` explicitly;
+TV uses a separate four-line profile at `${MEDIA_SORTER_CONFIG}.tv`, or
+`~/.config/media-sorter/config.tv` by default. Run `configure tv` (or the `configure-tv` alias) explicitly;
 existing movie configuration is neither migrated nor modified. Both modes keep
 source/server/username/destination settings independent. TV additionally needs
 Python **3.8+ locally** and **3.6+ remotely**, plus rsync 3.x on both ends. The
@@ -168,7 +171,13 @@ accepted (0 permits explicitly supplied specials). The complete target is
 `Send this season? [Y/n]` (or preview), the CLI lists all relative contents and
 the regular-file count. This is a file count, not an inferred episode count.
 Enter/Y/Yes approves; N/No skips the whole season; invalid input repeats; EOF
-stops with failure and does not approve the pending season. No file is renamed.
+cancels the selection batch with failure, without transferring any approved season. No file is renamed.
+All season approvals are collected before the transfer phase, matching movies.
+Each season shows its total size in decimal GB (two decimals; nonzero totals
+below 0.01 GB show `<0.01 GB`). Transfers show `Transferring N/total` and rsync
+progress, with `LC_ALL=C LANG=C` scoped to the CLI and remote commands. Printable
+ASCII paths display literally; control/non-ASCII characters remain escaped for
+safe display. These display changes do not alter filenames or shell quoting.
 All regular files, sidecars, empty subdirectories, and relative subtrees inside
 an approved season are retained; originals are never removed.
 
@@ -201,3 +210,54 @@ rejection/EOF, old configuration compatibility, symlinks/special files, transfer
 failure, and a target created during copying. On macOS the local remote fixture
 maps Linux exclusive rename to macOS `renamex_np(RENAME_EXCL)`; production still
 requires Linux. CI runs the movie and TV suites on Ubuntu and macOS.
+
+
+## Configuration and compatibility
+
+```sh
+./bin/media-sorter configure movies   # create/update the explicit movie profile
+./bin/media-sorter configure tv       # create/update the explicit TV profile
+./bin/media-sorter movies             # review/preview movies only
+./bin/media-sorter tv                 # review/preview TV only
+```
+
+Each profile stores, in order, its **local source root**, **SSH hostname/alias**,
+**SSH username**, and **remote library root**, one value per line. The files are
+plain data, never sourced or evaluated. For example, `config.movies` could hold
+`/Users/me/Rips/Movies`, `media-server`, `me`, `/srv/jellyfin/Movies`, while
+`config.tv` holds `/Users/me/Rips/TV`, `media-server`, `me`, `/srv/jellyfin/TV`.
+Each value is on its own line; do not enter the comma-separated example literally.
+Profiles keep both source and destination independent, even on different servers.
+This naming convention leaves room for future profiles such as `config.music`;
+no music command or transfer is implemented or accepted yet.
+
+Before saving, setup displays the media type, exact config path, source root,
+and `username@hostname:destination`. Review the media-specific destination,
+then type `yes` to save; `no` or EOF preserves all existing files. Blank setup
+answers retain the displayed previous values. Setup validates paths locally but
+never contacts the server; preview validates the destination over SSH before
+transfer. Every run repeats the profile and root mapping, and the final individual
+movie/season target remains visible before Y/n approval. `--source` is temporary
+and does not save settings.
+
+Existing four-line movie configs keep working unchanged. There is **no automatic
+migration**. `configure` alone edits the currently active movie config (the named
+`.movies` file if present, otherwise the legacy base file), preserving the original
+command. To adopt the named profile, run `configure movies`: it offers the active
+values and saves only to `.movies` after confirmation. The legacy file remains
+untouched. When both exist, `.movies` always wins; an invalid named profile fails
+instead of silently falling back to stale legacy values. TV never falls back to
+movie paths. Existing `.tv` files keep their format and location. New files use
+mode 0600 and atomic replacement; cancellation never rewrites either profile.
+
+Setup rejects filesystem-root paths, traversal components, and repeated slash
+separators. TV also rejects control characters and symlink directory ancestors.
+Configured movie and TV source roots must not overlap. Destination roots must not
+overlap when their configured SSH hostname/alias is the same, even with different
+usernames. These checks run during setup and invocation, including `--source`.
+Different aliases can refer to the same machine; the CLI cannot infer that, nor
+resolve remote bind mounts. Check the displayed paths yourself. Existing movie
+path acceptance is otherwise retained for compatibility; use canonical absolute
+paths without symlink aliases for reliable profile separation. To correct an
+overlap, rerun setup for the profile with the wrong root. No files are moved or
+removed by configuration.

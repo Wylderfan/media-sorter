@@ -20,6 +20,8 @@ class TVIntegration(unittest.TestCase):
     run_cli = test_cli.CLIIntegration.run_cli
 
     def prepare(self, layout='nested', name="Show's $(touch BAD) (2020)", season='Season 01'):
+        self.dest = self.root / "Library's TV"
+        self.dest.mkdir(exist_ok=True)
         self.tv = self.root / 'TV'
         self.tv.mkdir(exist_ok=True)
         path = self.tv / name / season if layout == 'nested' else self.tv / (name + ' ' + season if name else season)
@@ -162,6 +164,30 @@ if [ "$1" != --help ]; then
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(list((self.dest / 'Show' / 'Season 01').iterdir()), [])
         self.assertTrue((stage / 'payload' / 'episode.mkv').exists())
+
+    def test_batch_eof_and_readable_progress_locale(self):
+        path = self.prepare(name="Show's name")
+        self.prepare(name='Second', season='Season 02')
+        self.env.update(LC_ALL='media_sorter_missing.UTF-8', LANG='media_sorter_missing.UTF-8')
+        status, output = self.run_cli('tv', '--apply', responses=self.prompts() * 2, answers=['', None])
+        self.assertEqual(status, 1, output)
+        self.assertIn('Selection cancelled', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+        self.assertFalse((self.root / 'rsync.log').exists())
+        def approve(candidate):
+            self.assertEqual(list(self.dest.iterdir()), [])
+            return ''
+        status, output = self.run_cli('tv', '--apply', responses=self.prompts() * 2, answers=approve)
+        self.assertEqual(status, 0, output)
+        self.assertIn('Season directory: ' + str(path), output)
+        self.assertIn('Season size: <0.01 GB', output)
+        self.assertIn('Transferring 1/2:', output)
+        self.assertIn('Transferring 2/2:', output)
+        self.assertLess(output.rindex('[Y/n]'), output.index('Transferring 1/2:'))
+        self.assertEqual(set((self.root / 'locale.log').read_text().splitlines()), {'C:C'})
+        options = (self.root / 'rsync.log').read_text()
+        self.assertIn('--progress', options)
+        self.assertIn('--rsync-path=env LC_ALL=C LANG=C rsync', options)
 
     def test_multiple_seasons_and_shows(self):
         self.prepare(name='Alpha')
