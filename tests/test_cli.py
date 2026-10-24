@@ -198,9 +198,7 @@ cp -- "$src" "${dst#*:}"
                 candidate = self.movie / name
                 candidate.write_bytes(b'title')
                 def select_title(menu):
-                    # Match Bash %q output for the known title.
-                    escaped = name.replace(' ', r'\ ').replace('(', r'\(').replace(')', r'\)')
-                    return '' if menu.lstrip().startswith(escaped + ' (') else 'n'
+                    return '' if menu.lstrip().startswith(name + ' (') else 'n'
                 status, output = self.run_cli('movies', '--apply', answers=select_title)
                 self.assertEqual(status, 0, output)
                 self.assertEqual((self.dest / name).read_bytes(), b'title')
@@ -221,7 +219,7 @@ cp -- "$src" "${dst#*:}"
         (self.movie / 'middle.mkv').write_bytes(b'x' * 20)
         status, output = self.run_cli('movies', '--apply', answers=['N', ''])
         self.assertEqual(status, 0, output)
-        self.assertEqual(re.findall(r'Candidate: .*?\((\d+) bytes;', output), ['500', '20'])
+        self.assertEqual(re.findall(r'Candidate: (.*?) \(', output), ["main's $film.mkv", 'middle.mkv'])
         self.assertIn('transferred=1', output)
         self.assertEqual([p.name for p in self.dest.iterdir()], ['middle.mkv'])
 
@@ -230,7 +228,7 @@ cp -- "$src" "${dst#*:}"
         (self.movie / 'zero.mkv').touch()
         status, output = self.run_cli('movies', '--apply', approval=False)
         self.assertEqual(status, 0, output)
-        self.assertEqual(re.findall(r'Candidate: .*?\((\d+) bytes;', output), ['500', '20', '5', '0'])
+        self.assertEqual(re.findall(r'Candidate: (.*?) \(', output), ["main's $film.mkv", 'middle.mkv', 'extra.mkv', 'zero.mkv'])
         self.assertIn('skipped=1', output)
         self.assertEqual(list(self.dest.iterdir()), [])
 
@@ -350,7 +348,7 @@ cp -- "$src" "${dst#*:}"
         (self.movie / 'extras' / 'nested.mp4').write_bytes(b'n' * 2000)
         status, output = self.run_cli('movies', approval=False)
         self.assertEqual(status, 0, output)
-        self.assertEqual(re.findall(r'Candidate: .*?\((\d+) bytes;', output), ['1000', '500', '5'])
+        self.assertEqual(re.findall(r'Candidate: (.*?) \(', output), [mp4.name, "main's $film.mkv", 'extra.mkv'])
         self.assertNotIn('nested.mp4', output)
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
@@ -460,6 +458,58 @@ cp -- "$src" "${dst#*:}"
         status, output = self.run_cli('movies', '--apply')
         self.assertNotEqual(status, 0, output)
         self.assertIn('Remote destination must exist and be writable', output)
+
+    def test_printable_paths_display_literally_and_transfer_unchanged(self):
+        name = "Movie's cut \\ literal $(touch BAD) [2024]; 100%.mp4"
+        source = self.movie / name
+        source.write_bytes(b'x' * 1000)
+        status, output = self.run_cli('movies')
+        self.assertEqual(status, 0, output)
+        self.assertIn('Movie folder: ' + self.movie.name, output)
+        self.assertIn('Candidate: ' + name + ' (<0.01 GB;', output)
+        self.assertIn('Selected: ' + str(source), output)
+        self.assertIn('Destination: ' + str(self.dest / name), output)
+        self.assertIn('Would transfer to ' + str(self.dest / name), output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('Transferring 1/1: ' + name, output)
+        self.assertEqual((self.dest / name).read_bytes(), source.read_bytes())
+        self.assertEqual([p.name for p in self.dest.iterdir()], [name])
+        self.assertFalse((self.root / 'BAD').exists())
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('Conflict: ' + str(self.dest / name), output)
+
+    def test_control_characters_are_escaped_only_for_display(self):
+        name = 'Control\x1b[31m\nInjected line\tfile.mp4'
+        source = self.movie / name
+        source.write_bytes(b'x' * 1000)
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertNotIn('\x1b', output)
+        self.assertNotIn('\t', output)
+        self.assertFalse(any(line.startswith('Injected line') for line in output.splitlines()))
+        self.assertIn(r'\nInjected line\tfile.mp4', output)
+        self.assertEqual((self.dest / name).read_bytes(), source.read_bytes())
+        self.assertIn('transferred=1', output)
+
+    def test_candidate_decimal_gb_and_exact_byte_ranking(self):
+        shutil.rmtree(self.movie)
+        self.movie.mkdir()
+        cases = [(4287390252, '4.29 GB'), (999999999, '1.00 GB'),
+                 (10000000, '0.01 GB'), (9999999, '<0.01 GB'),
+                 (1, '<0.01 GB'), (0, '0.00 GB')]
+        for size, _ in reversed(cases):
+            with (self.movie / ('size-' + str(size) + '.mp4')).open('wb') as fixture:
+                fixture.truncate(size)  # Sparse fixtures; preview never copies them.
+        status, output = self.run_cli('movies', approval=False)
+        self.assertEqual(status, 0, output)
+        candidates = [line for line in output.splitlines() if line.startswith('Candidate:')]
+        self.assertEqual(len(candidates), len(cases))
+        for line, (size, label) in zip(candidates, cases):
+            self.assertIn('size-' + str(size) + '.mp4 (' + label + ';', line)
+        self.assertEqual(list(self.dest.iterdir()), [])
 
     def test_scan_failures_discard_partial_results(self):
         real_find = shutil.which('find')

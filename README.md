@@ -31,7 +31,11 @@ The source can contain movie folders such as `Movies/Movie Title (Year)/chosen-f
 or loose files such as `Movies/Some Title.mkv`. Both send the approved file directly
 into the configured destination: `DEST/chosen-file.mkv` or `DEST/Some Title.mkv`.
 Original filenames are preserved; no movie-name destination folders are created.
-The exact destination file path is displayed before approval. Files with the same
+The exact destination file path is displayed before approval. Printable paths
+show spaces, apostrophes, and literal backslashes as they occur in the filename;
+these labels are not shell commands to copy and execute. Names containing
+non-printable bytes (including terminal controls, tabs, or newlines) retain
+shell-escaped display for safety. Filenames and transfer quoting are unchanged. Files with the same
 basename from different source folders or loose files share a destination path:
 the first successful publication wins and later collisions are reported and skipped,
 without overwriting or trying another candidate from an already approved folder.
@@ -43,8 +47,10 @@ movie subfolder, not to the entire Movies root. Other root files and symlinks
 are ignored. Only immediate movie folders and their immediate MKV/MP4 files are candidates. Nested files (including bonus
 content) are ignored. Every immediate MKV/MP4 remains
 selectable, including names such as `Extra Ordinary (2019).mkv`, `bonus.mkv`, or
-`sample.mkv`. Candidates across both formats are offered largest first, showing filename and size in
-bytes. Size is only a heuristic: the largest file can still be an extra.
+`sample.mkv`. Candidates across both formats are offered largest first, showing filename and decimal GB
+(1 GB = 1,000,000,000 bytes), rounded to two decimal places. For example,
+4,287,390,252 bytes displays as `4.29 GB`. Nonempty files below 0.01 GB show
+`<0.01 GB`; empty files show `0.00 GB`. Sorting always uses exact byte counts. Size is only a heuristic: the largest file can still be an extra.
 
 For each candidate, `Send this file? [Y/n]` accepts Enter, Y, or Yes to approve
 (case insensitive). N or No offers the next candidate in that movie folder.

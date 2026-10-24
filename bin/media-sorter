@@ -19,6 +19,25 @@ quote() {
     done
     printf "%s'" "$rest"
 }
+# Human-readable labels, not shell commands. Escape non-printable bytes so a
+# filename cannot inject terminal controls or additional output lines.
+display_path() {
+    if [[ "$1" == *[![:print:]]* ]]; then
+        printf '%q' "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+# Decimal GB, rounded to two places with locale-independent integer arithmetic.
+display_size() {
+    local bytes=$1 hundredths
+    if [ "$bytes" -gt 0 ] && [ "$bytes" -lt 10000000 ]; then
+        printf '<0.01 GB'
+    else
+        hundredths=$(((bytes+5000000)/10000000))
+        printf '%d.%02d GB' "$((hundredths/100))" "$((hundredths%100))"
+    fi
+}
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 summary() { printf 'Summary: transferred=%d skipped=%d conflicted=%d failed=%d approved=%d\n' "$transferred" "$skipped" "$conflicted" "$failed" "$approved"; }
 ask() { [ -t 3 ] || return 1; printf '%s' "$1" >&2; IFS= read -r REPLY <&3; }
@@ -43,7 +62,7 @@ configure() {
     tmp=$(umask 077; mktemp "${CONFIG}.XXXXXX") || die 'Cannot create configuration.'
     printf '%s\n' "$SOURCE" "$SERVER" "$USER_NAME" "$DEST" > "$tmp"
     mv -f -- "$tmp" "$CONFIG" || die 'Cannot save configuration.'
-    printf 'Saved %s\n' "$CONFIG"
+    printf 'Saved %s\n' "$(display_path "$CONFIG")"
 }
 load() {
     if [ ! -f "$CONFIG" ]; then configure; fi
@@ -84,17 +103,17 @@ trap 'rm -rf -- "$scan_dir"' EXIT
 : > "$scan_dir/approved" || die 'Cannot create approval list.'
 printf 'Selection phase: approve all movies before any transfers.\n'
 if ! find "$SOURCE" -mindepth 1 -maxdepth 1 \( -type d -o \( -type f \( -iname '*.mkv' -o -iname '*.mp4' \) \) \) -print0 > "$scan_dir/entries"; then
-    printf 'Error: cannot scan source: %q\n' "$SOURCE" >&2
+    printf 'Error: cannot scan source: %s\n' "$(display_path "$SOURCE")" >&2
     failed=$((failed+1)); summary; exit 1
 fi
 while IFS= read -r -d '' entry; do
     label='Movie folder'
     if [ -L "$entry" ]; then
-        printf 'Error: source entry became a symlink: %q\n' "$entry" >&2
+        printf 'Error: source entry became a symlink: %s\n' "$(display_path "$entry")" >&2
         failed=$((failed+1)); continue
     elif [ -d "$entry" ]; then
         if ! find "$entry" -maxdepth 1 -type f \( -iname '*.mkv' -o -iname '*.mp4' \) -print0 > "$scan_dir/files"; then
-            printf 'Error: cannot scan movie folder: %q\n' "$entry" >&2
+            printf 'Error: cannot scan movie folder: %s\n' "$(display_path "$entry")" >&2
             failed=$((failed+1)); continue
         fi
     else
@@ -105,7 +124,7 @@ while IFS= read -r -d '' entry; do
     while IFS= read -r -d '' file; do
         # Every immediate MKV/MP4 stays selectable; names cannot establish main-feature identity.
         if ! size=$(wc -c < "$file"); then
-            printf 'Error: cannot inspect candidate: %q\n' "$file" >&2
+            printf 'Error: cannot inspect candidate: %s\n' "$(display_path "$file")" >&2
             failed=$((failed+1)); files=(); break
         fi
         # Stable insertion by size, preserving arbitrary filenames and Bash 3.2.
@@ -119,13 +138,13 @@ while IFS= read -r -d '' entry; do
         sizes[i]=$size
     done < "$scan_dir/files"
     [ "${#files[@]}" -gt 0 ] || continue
-    printf '\n%s: %q\n' "$label" "${entry##*/}"
+    printf '\n%s: %s\n' "$label" "$(display_path "${entry##*/}")"
     selected=0
     i=0
     for file in "${files[@]}"; do
-        printf 'Candidate: %q (%d bytes; size is a suggestion only)\n' "${file##*/}" "${sizes[i]}"
+        printf 'Candidate: %s (%s; size is a suggestion only)\n' "$(display_path "${file##*/}")" "$(display_size "${sizes[i]}")"
         target=${DEST%/}/${file##*/}
-        printf 'Destination: %q\n' "$target"
+        printf 'Destination: %s\n' "$(display_path "$target")"
         i=$((i+1))
         while :; do
             if [ "$APPLY" -eq 1 ]; then prompt='Send this file? [Y/n] '; else prompt='Preview this file? [Y/n] '; fi
@@ -142,7 +161,7 @@ while IFS= read -r -d '' entry; do
         [ "$selected" -eq 0 ] || break
     done
     [ "$selected" -eq 1 ] || { skipped=$((skipped+1)); continue; }
-    printf 'Selected: %q\n' "$file"
+    printf 'Selected: %s\n' "$(display_path "$file")"
     printf '%s\0' "$file" >> "$scan_dir/approved" || die 'Cannot record approval; batch cancelled.'
     approved=$((approved+1))
 done < "$scan_dir/entries"
@@ -153,15 +172,15 @@ while IFS= read -r -d '' file; do
     item=$((item+1))
     target=${DEST%/}/${file##*/}
     if [ ! -f "$file" ] || [ -L "$file" ] || [ ! -r "$file" ]; then
-        printf 'Error: approved source is no longer a readable regular file: %q\n' "$file" >&2
+        printf 'Error: approved source is no longer a readable regular file: %s\n' "$(display_path "$file")" >&2
         failed=$((failed+1)); continue
     fi
     remote "test ! -e $(quote "$target") && test ! -L $(quote "$target")"
     status=$?
-    if [ "$status" -eq 1 ]; then printf 'Conflict: %q\n' "$target"; conflicted=$((conflicted+1)); continue; fi
+    if [ "$status" -eq 1 ]; then printf 'Conflict: %s\n' "$(display_path "$target")"; conflicted=$((conflicted+1)); continue; fi
     if [ "$status" -ne 0 ]; then failed=$((failed+1)); continue; fi
-    if [ "$APPLY" -eq 0 ]; then printf 'Would transfer to %q\n' "$target"; continue; fi
-    printf '\nTransferring %d/%d: %q\n' "$item" "$approved" "${file##*/}"
+    if [ "$APPLY" -eq 0 ]; then printf 'Would transfer to %s\n' "$(display_path "$target")"; continue; fi
+    printf '\nTransferring %d/%d: %s\n' "$item" "$approved" "$(display_path "${file##*/}")"
     stage=${DEST%/}/.media-sorter-$$-$RANDOM-$RANDOM
     # mkdir is exclusive; a partial payload never has the final media filename.
     if ! remote "mkdir -- $(quote "$stage")"; then failed=$((failed+1)); continue; fi
@@ -173,7 +192,7 @@ while IFS= read -r -d '' file; do
     else
         failed=$((failed+1))
     fi
-    remote "rm -f -- $(quote "$stage/payload") && rmdir -- $(quote "$stage")" || printf 'Warning: staging cleanup failed: %q\n' "$stage" >&2
+    remote "rm -f -- $(quote "$stage/payload") && rmdir -- $(quote "$stage")" || printf 'Warning: staging cleanup failed: %s\n' "$(display_path "$stage")" >&2
 done < "$scan_dir/approved"
 summary
 [ "$failed" -eq 0 ]
