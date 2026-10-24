@@ -34,13 +34,16 @@ class CLIIntegration(unittest.TestCase):
 [ "${FAIL_SSH:-}" != yes ] || exit 255
 printf '%s:%s\\n' "$LC_ALL" "$LANG" >> "$LOCALE_LOG"
 printf '%s\\n' "$*" >> "$SSH_LOG"
+# SSH joins command arguments for the remote shell; support --rsync-path too.
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = rsync ]; then shift; exec "${REAL_RSYNC:?}" "$@"; fi
-    if [ "$#" -eq 1 ]; then
-        exec bash -c 'ln() { "${TEST_LN:-/bin/ln}" "$@"; }; '"$1"
-    fi
-    shift
+    case "$1" in
+        -n) shift;;
+        -o) shift 2;;
+        *) shift; break;; # destination host
+    esac
 done
+exec bash -c 'ln() { "${TEST_LN:-/bin/ln}" "$@"; }; '"$*"
+
 """)
         (tools / 'rsync').write_text('''#!/bin/bash
 printf '%s:%s\\n' "$LC_ALL" "$LANG" >> "$LOCALE_LOG"
