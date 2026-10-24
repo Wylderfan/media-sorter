@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Compatible with Bash 3.2; configuration is data, never shell code.
+# Use an installed, portable locale for this process and its children only.
+# Bash may warn about its inherited locale before executing this line.
+export LC_ALL=C LANG=C
 set -uo pipefail
 exec 3<&0
 CONFIG=${MEDIA_SORTER_CONFIG:-${HOME}/.config/media-sorter/config}
@@ -47,7 +50,7 @@ load() {
     { IFS= read -r SOURCE && IFS= read -r SERVER && IFS= read -r USER_NAME && IFS= read -r DEST; } < "$CONFIG" || die 'Invalid configuration; run configure.'
 }
 SSH_TRANSPORT=(ssh -o BatchMode=yes -o ConnectTimeout=10)
-remote() { "${SSH_TRANSPORT[@]}" -n "$USER_NAME@$SERVER" "$1"; }
+remote() { "${SSH_TRANSPORT[@]}" -n "$USER_NAME@$SERVER" "export LC_ALL=C LANG=C; $1"; }
 help() {
     printf '%s\n' 'Usage: media-sorter configure | movies [--source /path] [--apply] | --help' 'Movies accepts MKV and MP4 (case insensitive) and previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. No TV support.'
 }
@@ -78,6 +81,8 @@ remote "test -d $(quote "$DEST") && test -w $(quote "$DEST")" || die 'Remote des
 # Snapshot each enumeration and check find before consuming any partial output.
 scan_dir=$(mktemp -d "${TMPDIR:-/tmp}/media-sorter.XXXXXX") || die 'Cannot create scan workspace.'
 trap 'rm -rf -- "$scan_dir"' EXIT
+: > "$scan_dir/approved" || die 'Cannot create approval list.'
+printf 'Selection phase: approve all movies before any transfers.\n'
 if ! find "$SOURCE" -mindepth 1 -maxdepth 1 \( -type d -o \( -type f \( -iname '*.mkv' -o -iname '*.mp4' \) \) \) -print0 > "$scan_dir/entries"; then
     printf 'Error: cannot scan source: %q\n' "$SOURCE" >&2
     failed=$((failed+1)); summary; exit 1
@@ -125,7 +130,7 @@ while IFS= read -r -d '' entry; do
         while :; do
             if [ "$APPLY" -eq 1 ]; then prompt='Send this file? [Y/n] '; else prompt='Preview this file? [Y/n] '; fi
             if ! ask "$prompt"; then
-                printf '\nInput ended; stopping without approving this candidate.\n' >&2
+                printf '\nInput ended; batch cancelled. No approved files were transferred.\n' >&2
                 skipped=$((skipped+1)); summary; exit 1
             fi
             case "$REPLY" in
@@ -138,16 +143,29 @@ while IFS= read -r -d '' entry; do
     done
     [ "$selected" -eq 1 ] || { skipped=$((skipped+1)); continue; }
     printf 'Selected: %q\n' "$file"
+    printf '%s\0' "$file" >> "$scan_dir/approved" || die 'Cannot record approval; batch cancelled.'
     approved=$((approved+1))
+done < "$scan_dir/entries"
+printf '\nSelection complete: %d approved file(s).\n' "$approved"
+[ "$APPLY" -eq 0 ] || printf 'Transfer phase: starting approved batch.\n'
+item=0
+while IFS= read -r -d '' file; do
+    item=$((item+1))
+    target=${DEST%/}/${file##*/}
+    if [ ! -f "$file" ] || [ -L "$file" ] || [ ! -r "$file" ]; then
+        printf 'Error: approved source is no longer a readable regular file: %q\n' "$file" >&2
+        failed=$((failed+1)); continue
+    fi
     remote "test ! -e $(quote "$target") && test ! -L $(quote "$target")"
     status=$?
     if [ "$status" -eq 1 ]; then printf 'Conflict: %q\n' "$target"; conflicted=$((conflicted+1)); continue; fi
     if [ "$status" -ne 0 ]; then failed=$((failed+1)); continue; fi
     if [ "$APPLY" -eq 0 ]; then printf 'Would transfer to %q\n' "$target"; continue; fi
+    printf '\nTransferring %d/%d: %q\n' "$item" "$approved" "${file##*/}"
     stage=${DEST%/}/.media-sorter-$$-$RANDOM-$RANDOM
     # mkdir is exclusive; a partial payload never has the final media filename.
     if ! remote "mkdir -- $(quote "$stage")"; then failed=$((failed+1)); continue; fi
-    if rsync --protect-args -e "${SSH_TRANSPORT[*]}" -t -- "$file" "$USER_NAME@$SERVER:$stage/payload"; then
+    if rsync --protect-args --progress --rsync-path="env LC_ALL=C LANG=C rsync" -e "${SSH_TRANSPORT[*]}" -t -- "$file" "$USER_NAME@$SERVER:$stage/payload"; then
         # Hard-link publication is atomic and fails if a final file already exists.
         remote "ln -T -- $(quote "$stage/payload") $(quote "$target")"
         result=$?
@@ -156,6 +174,6 @@ while IFS= read -r -d '' entry; do
         failed=$((failed+1))
     fi
     remote "rm -f -- $(quote "$stage/payload") && rmdir -- $(quote "$stage")" || printf 'Warning: staging cleanup failed: %q\n' "$stage" >&2
-done < "$scan_dir/entries"
+done < "$scan_dir/approved"
 summary
 [ "$failed" -eq 0 ]

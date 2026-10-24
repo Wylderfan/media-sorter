@@ -52,13 +52,17 @@ Invalid input repeats the prompt; rejecting every candidate skips the movie
 once and continues. Declining a loose movie file skips just that movie.
 After the first approval, no more candidates are offered for that folder, even
 if that transfer fails or conflicts. At most one file per movie is selected per
-run. EOF (Ctrl-D) stops the batch with nonzero status and never approves a file;
-any earlier completed transfers remain. Preview uses `Preview this file? [Y/n]`
+run. Approvals are collected for the entire batch before any files are transferred.
+After selection, the CLI prints the approved count and processes that list without
+further approval prompts. EOF (Ctrl-D) during selection cancels the entire batch
+with nonzero status: even previously approved files are not transferred. Preview uses `Preview this file? [Y/n]`
 and makes no remote library changes. `--apply` is still required to send files.
 Review carefully: titles and main-feature identity are not inferred or verified.
 
 Preview checks connectivity, capabilities, destination access, and collisions
-without writing remote library files. Apply stages one approved file at a time
+without writing remote library files. Apply shows each original filename and its
+position in the batch, plus rsync's per-file bytes, percentage, speed, and time
+progress (`--progress`). Very small files may finish in one update. Apply stages one approved file at a time
 in a unique hidden `.media-sorter-*` directory directly inside the configured
 destination. This temporary staging directory is removed after ordinary completion. An atomic hard link
 publishes the finished file without replacing an existing final path; this
@@ -71,6 +75,25 @@ movie enumeration, candidate inspection, and transfer failures
 return nonzero and are reported. A failed source scan stops the batch; a failed
 movie scan skips that folder and continues the remaining movies. Partial scan
 results are never offered for approval. Jellyfin indexing is not checked or triggered.
+
+### Output and locale troubleshooting
+
+The CLI sets `LC_ALL=C` and `LANG=C` for its own commands and children, and for
+remote commands/rsync. This avoids repeated warnings from inheriting a locale
+such as `en_CA.UTF-8` that is unavailable on one machine, without editing local
+or server configuration or hiding stderr. Bash can still warn once at startup
+before script code runs; remote shell startup files can also set an invalid
+locale before the command runs. To avoid an inherited local startup warning:
+
+```sh
+LC_ALL=C LANG=C ./bin/media-sorter movies --apply
+```
+
+A `cannot change locale ... No such file or directory` warning refers to locale
+availability, not necessarily a missing movie/destination directory. For a separate
+path error, retain its exact line and the selected/destination paths for diagnosis.
+The destination must already exist; approved source paths are rechecked before
+transfer. Do not move or modify the prepared batch during selection or transfer.
 
 ### Development verification
 
