@@ -32,16 +32,21 @@ class CLIIntegration(unittest.TestCase):
         tools.mkdir()
         (tools / 'ssh').write_text("""#!/bin/bash
 [ "${FAIL_SSH:-}" != yes ] || exit 255
+printf '%s:%s\\n' "$LC_ALL" "$LANG" >> "$LOCALE_LOG"
 printf '%s\\n' "$*" >> "$SSH_LOG"
+# SSH joins command arguments for the remote shell; support --rsync-path too.
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = rsync ]; then shift; exec "${REAL_RSYNC:?}" "$@"; fi
-    if [ "$#" -eq 1 ]; then
-        exec bash -c 'ln() { "${TEST_LN:-/bin/ln}" "$@"; }; '"$1"
-    fi
-    shift
+    case "$1" in
+        -n) shift;;
+        -o|-l|-p) shift 2;;
+        *) shift; break;; # destination host
+    esac
 done
+exec bash -c 'ln() { "${TEST_LN:-/bin/ln}" "$@"; }; '"$*"
+
 """)
         (tools / 'rsync').write_text('''#!/bin/bash
+printf '%s:%s\\n' "$LC_ALL" "$LANG" >> "$LOCALE_LOG"
 if [ "$1" != --help ]; then printf '%s\\n' "$*" >> "$RSYNC_LOG"; fi
 [ -z "${REAL_RSYNC:-}" ] || exec "$REAL_RSYNC" "$@"
 if [ "$1" = --help ]; then echo --protect-args; exit 0; fi
@@ -54,7 +59,7 @@ cp -- "$src" "${dst#*:}"
         for tool in tools.iterdir():
             tool.chmod(0o755)
         self.env = dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}', MEDIA_SORTER_CONFIG=str(self.config),
-                        SSH_LOG=str(self.root / 'ssh.log'), RSYNC_LOG=str(self.root / 'rsync.log'))
+                        LOCALE_LOG=str(self.root / 'locale.log'), SSH_LOG=str(self.root / 'ssh.log'), RSYNC_LOG=str(self.root / 'rsync.log'))
 
     def run_cli(self, *args, approval=True, responses=None, answers=None):
         master, slave = pty.openpty()
@@ -183,6 +188,7 @@ cp -- "$src" "${dst#*:}"
         status, output = self.run_cli('movies', '--apply')
         self.assertEqual(status, 0, output)
         self.assertIn('transferred=1', output)
+        self.assertIn('100%', output)
         target = self.dest / "main's $film.mkv"
         self.assertEqual(target.read_bytes(), (self.movie / target.name).read_bytes())
 
@@ -391,6 +397,69 @@ cp -- "$src" "${dst#*:}"
         self.assertEqual((self.dest / 'same.mp4').read_bytes(), winner)
         self.assertEqual((self.movie / 'same.mp4').read_bytes(), b'folder' * 200)
         self.assertEqual((self.source / 'same.mp4').read_bytes(), b'loose')
+
+    def test_batch_collects_all_approvals_before_transfer(self):
+        (self.source / 'loose.mp4').write_bytes(b'loose')
+        seen = []
+        def approve(candidate):
+            self.assertEqual(list(self.dest.iterdir()), [])
+            self.assertFalse((self.root / 'rsync.log').exists())
+            seen.append(candidate)
+            return ''
+        status, output = self.run_cli('movies', '--apply', answers=approve)
+        self.assertEqual(status, 0, output)
+        self.assertEqual(len(seen), 2)
+        self.assertIn('transferred=2', output)
+        self.assertLess(output.rindex('[Y/n] '), output.index('Transfer phase:'))
+        self.assertIn('Transferring 1/2:', output)
+        self.assertIn('Transferring 2/2:', output)
+
+    def test_eof_cancels_previously_approved_batch(self):
+        (self.source / 'loose.mp4').write_bytes(b'loose')
+        status, output = self.run_cli('movies', '--apply', answers=['', None])
+        self.assertNotEqual(status, 0, output)
+        self.assertIn('approved=1', output)
+        self.assertIn('batch cancelled', output)
+        self.assertIn('transferred=0', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+        self.assertFalse((self.root / 'rsync.log').exists())
+
+    def test_missing_approved_source_is_reported_before_staging(self):
+        def approve(candidate):
+            (self.movie / "main's $film.mkv").unlink()
+            return ''
+        status, output = self.run_cli('movies', '--apply', answers=approve)
+        self.assertNotEqual(status, 0, output)
+        self.assertIn('no longer a readable regular file', output)
+        self.assertIn('failed=1', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+
+    def test_collision_created_during_selection_is_not_overwritten(self):
+        def approve(candidate):
+            (self.dest / "main's $film.mkv").write_bytes(b'existing')
+            return ''
+        status, output = self.run_cli('movies', '--apply', answers=approve)
+        self.assertEqual(status, 0, output)
+        self.assertIn('conflicted=1', output)
+        self.assertEqual((self.dest / "main's $film.mkv").read_bytes(), b'existing')
+        self.assertFalse((self.root / 'rsync.log').exists())
+
+    def test_portable_locale_and_progress_preserve_errors(self):
+        self.env.update(LC_ALL='media_sorter_missing.UTF-8', LANG='media_sorter_missing.UTF-8')
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertEqual(set((self.root / 'locale.log').read_text().splitlines()), {'C:C'})
+        self.assertNotIn('cannot change locale', output.split('Selection phase:', 1)[1])
+        for line in (self.root / 'ssh.log').read_text().splitlines():
+            self.assertIn('export LC_ALL=C LANG=C;', line)
+        options = (self.root / 'rsync.log').read_text()
+        self.assertIn('--progress', options)
+        self.assertIn('--rsync-path=env LC_ALL=C LANG=C rsync', options)
+        self.dest.joinpath("main's $film.mkv").unlink()
+        self.dest.rmdir()
+        status, output = self.run_cli('movies', '--apply')
+        self.assertNotEqual(status, 0, output)
+        self.assertIn('Remote destination must exist and be writable', output)
 
     def test_scan_failures_discard_partial_results(self):
         real_find = shutil.which('find')
