@@ -49,7 +49,7 @@ load() {
 SSH_TRANSPORT=(ssh -o BatchMode=yes -o ConnectTimeout=10)
 remote() { "${SSH_TRANSPORT[@]}" -n "$USER_NAME@$SERVER" "$1"; }
 help() {
-    printf '%s\n' 'Usage: media-sorter configure | movies [--source /path] [--apply] | --help' 'Movies previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. No TV support.'
+    printf '%s\n' 'Usage: media-sorter configure | movies [--source /path] [--apply] | --help' 'Movies accepts MKV and MP4 (case insensitive) and previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. No TV support.'
 }
 case "${1:---help}" in
     --help|-h) help; exit 0;;
@@ -78,7 +78,7 @@ remote "test -d $(quote "$DEST") && test -w $(quote "$DEST")" || die 'Remote des
 # Snapshot each enumeration and check find before consuming any partial output.
 scan_dir=$(mktemp -d "${TMPDIR:-/tmp}/media-sorter.XXXXXX") || die 'Cannot create scan workspace.'
 trap 'rm -rf -- "$scan_dir"' EXIT
-if ! find "$SOURCE" -mindepth 1 -maxdepth 1 \( -type d -o \( -type f -iname '*.mkv' \) \) -print0 > "$scan_dir/entries"; then
+if ! find "$SOURCE" -mindepth 1 -maxdepth 1 \( -type d -o \( -type f \( -iname '*.mkv' -o -iname '*.mp4' \) \) \) -print0 > "$scan_dir/entries"; then
     printf 'Error: cannot scan source: %q\n' "$SOURCE" >&2
     failed=$((failed+1)); summary; exit 1
 fi
@@ -88,7 +88,7 @@ while IFS= read -r -d '' entry; do
         printf 'Error: source entry became a symlink: %q\n' "$entry" >&2
         failed=$((failed+1)); continue
     elif [ -d "$entry" ]; then
-        if ! find "$entry" -maxdepth 1 -type f -iname '*.mkv' -print0 > "$scan_dir/files"; then
+        if ! find "$entry" -maxdepth 1 -type f \( -iname '*.mkv' -o -iname '*.mp4' \) -print0 > "$scan_dir/files"; then
             printf 'Error: cannot scan movie folder: %q\n' "$entry" >&2
             failed=$((failed+1)); continue
         fi
@@ -98,7 +98,7 @@ while IFS= read -r -d '' entry; do
     fi
     files=(); sizes=()
     while IFS= read -r -d '' file; do
-        # Every immediate MKV stays selectable; names cannot establish main-feature identity.
+        # Every immediate MKV/MP4 stays selectable; names cannot establish main-feature identity.
         if ! size=$(wc -c < "$file"); then
             printf 'Error: cannot inspect candidate: %q\n' "$file" >&2
             failed=$((failed+1)); files=(); break

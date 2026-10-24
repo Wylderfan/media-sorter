@@ -338,6 +338,60 @@ cp -- "$src" "${dst#*:}"
         self.assertNotIn('/plain/plain.mkv', output)
         self.assertEqual(list(self.dest.iterdir()), [])
 
+    def test_mixed_formats_rank_by_size_and_select_only_one(self):
+        mp4 = self.movie / "Feature's $movie.Mp4"
+        mp4.write_bytes(b'p' * 1000)
+        (self.movie / 'extras' / 'nested.mp4').write_bytes(b'n' * 2000)
+        status, output = self.run_cli('movies', approval=False)
+        self.assertEqual(status, 0, output)
+        self.assertEqual(re.findall(r'Candidate: .*?\((\d+) bytes;', output), ['1000', '500', '5'])
+        self.assertNotIn('nested.mp4', output)
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertEqual(output.count('[Y/n] '), 1)
+        self.assertEqual((self.dest / mp4.name).read_bytes(), mp4.read_bytes())
+        (self.dest / mp4.name).unlink()
+        status, output = self.run_cli('movies', '--apply', answers=['n', ''])
+        self.assertEqual(status, 0, output)
+        self.assertEqual([p.name for p in self.dest.iterdir()], ["main's $film.mkv"])
+        self.assertTrue(mp4.exists())
+
+    def test_loose_mp4_case_preview_transfer_and_exclusions(self):
+        shutil.rmtree(self.movie)
+        names = ['lower.mp4', 'UPPER.MP4', 'Mixed.mP4', 'existing.MKV']
+        for name in names:
+            (self.source / name).write_bytes(b'movie')
+        for name in ['ignore.avi', 'ignore.mp4.txt']:
+            (self.source / name).write_bytes(b'ignore')
+        (self.source / 'linked.mp4').symlink_to(self.source / 'lower.mp4')
+        status, output = self.run_cli('movies')
+        self.assertEqual(status, 0, output)
+        self.assertIn('approved=4', output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=4', output)
+        self.assertEqual(sorted(p.name for p in self.dest.iterdir()), sorted(names))
+        for name in names:
+            self.assertEqual((self.dest / name).read_bytes(), (self.source / name).read_bytes())
+
+    def test_mp4_collision_between_folder_and_loose_file(self):
+        (self.movie / 'same.mp4').write_bytes(b'folder' * 200)
+        (self.source / 'same.mp4').write_bytes(b'loose')
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('transferred=1 skipped=0 conflicted=1', output)
+        self.assertEqual(output.count('[Y/n] '), 2)
+        self.assertEqual([p.name for p in self.dest.iterdir()], ['same.mp4'])
+        winner = (self.dest / 'same.mp4').read_bytes()
+        self.assertIn(winner, [b'folder' * 200, b'loose'])
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('conflicted=2', output)
+        self.assertEqual((self.dest / 'same.mp4').read_bytes(), winner)
+        self.assertEqual((self.movie / 'same.mp4').read_bytes(), b'folder' * 200)
+        self.assertEqual((self.source / 'same.mp4').read_bytes(), b'loose')
+
     def test_scan_failures_discard_partial_results(self):
         real_find = shutil.which('find')
         tool = self.root / 'tools' / 'find'
