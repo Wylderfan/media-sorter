@@ -31,7 +31,11 @@ The source can contain movie folders such as `Movies/Movie Title (Year)/chosen-f
 or loose files such as `Movies/Some Title.mkv`. Both send the approved file directly
 into the configured destination: `DEST/chosen-file.mkv` or `DEST/Some Title.mkv`.
 Original filenames are preserved; no movie-name destination folders are created.
-The exact destination file path is displayed before approval. Files with the same
+The exact destination file path is displayed before approval. Printable paths
+show spaces, apostrophes, and literal backslashes as they occur in the filename;
+these labels are not shell commands to copy and execute. Names containing
+non-printable bytes (including terminal controls, tabs, or newlines) retain
+shell-escaped display for safety. Filenames and transfer quoting are unchanged. Files with the same
 basename from different source folders or loose files share a destination path:
 the first successful publication wins and later collisions are reported and skipped,
 without overwriting or trying another candidate from an already approved folder.

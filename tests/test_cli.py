@@ -198,9 +198,7 @@ cp -- "$src" "${dst#*:}"
                 candidate = self.movie / name
                 candidate.write_bytes(b'title')
                 def select_title(menu):
-                    # Match Bash %q output for the known title.
-                    escaped = name.replace(' ', r'\ ').replace('(', r'\(').replace(')', r'\)')
-                    return '' if menu.lstrip().startswith(escaped + ' (') else 'n'
+                    return '' if menu.lstrip().startswith(name + ' (') else 'n'
                 status, output = self.run_cli('movies', '--apply', answers=select_title)
                 self.assertEqual(status, 0, output)
                 self.assertEqual((self.dest / name).read_bytes(), b'title')
@@ -460,6 +458,41 @@ cp -- "$src" "${dst#*:}"
         status, output = self.run_cli('movies', '--apply')
         self.assertNotEqual(status, 0, output)
         self.assertIn('Remote destination must exist and be writable', output)
+
+    def test_printable_paths_display_literally_and_transfer_unchanged(self):
+        name = "Movie's cut \\ literal $(touch BAD) [2024]; 100%.mp4"
+        source = self.movie / name
+        source.write_bytes(b'x' * 1000)
+        status, output = self.run_cli('movies')
+        self.assertEqual(status, 0, output)
+        self.assertIn('Movie folder: ' + self.movie.name, output)
+        self.assertIn('Candidate: ' + name + ' (1000 bytes;', output)
+        self.assertIn('Selected: ' + str(source), output)
+        self.assertIn('Destination: ' + str(self.dest / name), output)
+        self.assertIn('Would transfer to ' + str(self.dest / name), output)
+        self.assertEqual(list(self.dest.iterdir()), [])
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('Transferring 1/1: ' + name, output)
+        self.assertEqual((self.dest / name).read_bytes(), source.read_bytes())
+        self.assertEqual([p.name for p in self.dest.iterdir()], [name])
+        self.assertFalse((self.root / 'BAD').exists())
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertIn('Conflict: ' + str(self.dest / name), output)
+
+    def test_control_characters_are_escaped_only_for_display(self):
+        name = 'Control\x1b[31m\nInjected line\tfile.mp4'
+        source = self.movie / name
+        source.write_bytes(b'x' * 1000)
+        status, output = self.run_cli('movies', '--apply')
+        self.assertEqual(status, 0, output)
+        self.assertNotIn('\x1b', output)
+        self.assertNotIn('\t', output)
+        self.assertFalse(any(line.startswith('Injected line') for line in output.splitlines()))
+        self.assertIn(r'\nInjected line\tfile.mp4', output)
+        self.assertEqual((self.dest / name).read_bytes(), source.read_bytes())
+        self.assertIn('transferred=1', output)
 
     def test_scan_failures_discard_partial_results(self):
         real_find = shutil.which('find')
