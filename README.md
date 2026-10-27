@@ -1,6 +1,6 @@
 # media-sorter
 
-A manually invoked movies-only Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie or a loose top-level MKV or MP4, and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
+A manually invoked Bash CLI for sending prepared movie rips from a Mac to a Linux Jellyfin library over SSH and rsync. Prepare one folder per movie or a loose top-level MKV or MP4, and finish writing files before starting. No metadata lookup, renaming, watchers, Jellyfin API, or server administration.
 
 ## Running the MVP
 
@@ -21,8 +21,11 @@ verify the host through ordinary SSH first. Both preflight and transfer use
 `BatchMode=yes` and a 10-second connection timeout, preserving SSH's host-key
 policy. The CLI does not install or configure Tailscale.
 
-Settings are four plain text lines (source, server, username, destination) at
-`~/.config/media-sorter/config`. `MEDIA_SORTER_CONFIG` overrides that location.
+Settings are four plain text lines (source, server, username, destination) per
+media profile. `MEDIA_SORTER_CONFIG` selects the base path, defaulting to
+`~/.config/media-sorter/config`. Movies uses `config.movies` when it exists,
+otherwise the original `config` file. TV uses only `config.tv`. See configuration
+and compatibility below.
 They are never executed as shell code. Setup requires a terminal and explicit
 `yes` before saving; `--source` does not rewrite saved settings. Paths must be
 absolute and settings cannot contain newlines. No passwords are stored.
@@ -122,8 +125,161 @@ Tests do not establish real SSH connectivity or access to your server.
 
 ## Remaining work and limits
 
-This is a small MVP. TV/both commands are rejected. Duration-based suggestions,
-TV identification and ordering remain future work. A user has reported a
+This is a small MVP. The `both` command is rejected. Duration-based suggestions and automatic
+TV episode identification remain out of scope. A user has reported a
 successful Mac-to-Linux test; automated checks use local fixtures, not a real
 server. The destination must support hard links; publication does not overwrite
 existing files. Interruptions may leave staging data as described above.
+
+
+## Experimental TV seasons
+
+```sh
+./bin/media-sorter configure-tv
+./bin/media-sorter tv                       # preview is the default
+./bin/media-sorter tv --source /absolute/path/to/TV
+./bin/media-sorter tv --apply               # still asks for each season
+```
+
+TV uses a separate four-line profile at `${MEDIA_SORTER_CONFIG}.tv`, or
+`~/.config/media-sorter/config.tv` by default. Run `configure tv` (or the `configure-tv` alias) explicitly;
+existing movie configuration is neither migrated nor modified. Both modes keep
+source/server/username/destination settings independent. TV additionally needs
+Python **3.8+ locally** and **3.6+ remotely**, plus rsync 3.x on both ends. The
+Bash entry point remains compatible with macOS Bash 3.2. Keep `bin/` and `lib/`
+together when installing this checkout. The TV destination must be Linux with
+libc `renameat2` and filesystem support for `RENAME_NOREPLACE`. Unsupported
+publication fails closed; there is no non-atomic fallback.
+
+Supported layouts are `TV/Show Name (Year)/Season 01/` and
+`TV/Show Name (Year) Season 01/` (also `TV/Season 01/`). Season labels `Season N`
+and `SNN`, optionally preceded by a show name, are recognized only at the end
+of the directory name. A directory containing files is also offered as an
+unlabeled season; otherwise its immediate directories are offered as seasons
+under that show's context. Unlabeled flat seasons containing only subdirectories
+are ambiguous: use a recognizable season directory label first. Loose root
+files and root symlinks are reported and ignored. No deep show/season search or
+episode-name parsing occurs. Empty seasons are skipped. A season containing any
+symlink or special file is rejected in full, not silently copied in part.
+
+The parent show directory or the show prefix in a season directory supplies a
+suggestion. **Every show and season suggestion must be confirmed or corrected**;
+blank identities without a fallback require entry, and a year is never invented.
+Within one invocation only, an unrecognized show defaults to the last confirmed
+show. After you confirm the show, an unrecognized season defaults to the last
+confirmed season plus one **only if the show matches exactly**. These fallbacks
+are explicitly labeled editable suggestions, not inferred metadata. Recognized
+current folder show/season values take precedence. Enter accepts the displayed
+suggestion; typing replaces it. Changing to a different show requires a season
+number unless the current folder supplies one. Returning to an earlier show does
+not restore older history: only the immediately previous identity is remembered.
+
+Memory updates after **both** identity prompts have valid confirmed values, before
+the transfer Y/n prompt. Declining a season's transfer still remembers its confirmed
+identity, so the next unlabeled season can suggest the next number. Invalid input
+and an incomplete/EOF identity never update memory. Season 00 increments to 01;
+after 99 there is no increment suggestion (enter a number from 0 to 99). Selection
+EOF cancels the batch as before. No values persist in config or survive a new run;
+folder traversal order is unchanged, so always review the suggested sequence.
+
+For example, for `Bob's Burgers (2011) Season 1 S01 (1080p )`, enter
+`Bob's Burgers (2011)` and `1` once. On the next unrecognized folder in that run,
+the prompts suggest that show and season `2`; accept with Enter or correct them.
+Start with `./bin/media-sorter tv` to review these defaults in preview before using
+`--apply`. Enter a
+show name with its year when known, or without a year. Season numbers 0–99 are
+accepted (0 permits explicitly supplied specials). The complete target is
+`TV_DEST/Show Name (Year)/Season NN/`, with the year omitted when absent. Before
+`Send this season? [Y/n]` (or preview), the CLI lists all relative contents and
+the regular-file count. This is a file count, not an inferred episode count.
+Enter/Y/Yes approves; N/No skips the whole season; invalid input repeats; EOF
+cancels the selection batch with failure, without transferring any approved season. No file is renamed.
+All season approvals are collected before the transfer phase, matching movies.
+Each season shows its total size in decimal GB (two decimals; nonzero totals
+below 0.01 GB show `<0.01 GB`). Transfers show `Transferring N/total` and rsync
+progress, with `LC_ALL=C LANG=C` scoped to the CLI and remote commands. Printable
+ASCII paths display literally; control/non-ASCII characters remain escaped for
+safe display. These display changes do not alter filenames or shell quoting.
+All regular files, sidecars, empty subdirectories, and relative subtrees inside
+an approved season are retained; originals are never removed.
+
+Preview performs read-only SSH capability/path/collision checks and never creates
+remote directories. Apply first copies into an exclusive hidden
+`.media-sorter-tv-*` directory inside the TV destination. Only a successful copy
+with unchanged source inventory is published, using an atomic, exclusive directory
+rename. Existing seasons (including empty directories, files, and symlinks) are
+conflicts: no overwrite, merge, duplicate verification, or resume. A target that
+appears during copying also wins and is untouched. Existing show directories can
+hold other seasons. A show path must be a real directory; source/destination
+ancestors cannot be symlinks. Absolute configuration paths reject traversal
+components and control characters; show/season identities must be single safe
+components. SSH commands quote data, and rsync uses protected arguments and the
+same SSH options as movies.
+
+Ordinary copy/publication failure removes the private stage and reports failure;
+a concurrent season collision is reported as a conflict. Abrupt termination or
+lost SSH may leave a hidden stage, and failed publication can leave an empty show
+directory. Inspect abandoned stages before removing them manually. This tool
+assumes trusted, quiescent source and destination directories: finish ripping
+before running it, and do not move, replace, or modify directory ancestors during
+transfer. Inventory checks detect ordinary source changes, but are not a snapshot
+or protection against a malicious filesystem writer. No remote administration,
+Jellyfin refresh/API, metadata service, or real-media test is performed.
+
+TV tests add both layouts, multiple shows/seasons, identity corrections with no
+guess, recursive real-rsync transfers, punctuation in names, preview immutability,
+rejection/EOF, old configuration compatibility, symlinks/special files, transfer
+failure, and a target created during copying. On macOS the local remote fixture
+maps Linux exclusive rename to macOS `renamex_np(RENAME_EXCL)`; production still
+requires Linux. CI runs the movie and TV suites on Ubuntu and macOS.
+
+
+## Configuration and compatibility
+
+```sh
+./bin/media-sorter configure movies   # create/update the explicit movie profile
+./bin/media-sorter configure tv       # create/update the explicit TV profile
+./bin/media-sorter movies             # review/preview movies only
+./bin/media-sorter tv                 # review/preview TV only
+```
+
+Each profile stores, in order, its **local source root**, **SSH hostname/alias**,
+**SSH username**, and **remote library root**, one value per line. The files are
+plain data, never sourced or evaluated. For example, `config.movies` could hold
+`/Users/me/Rips/Movies`, `media-server`, `me`, `/srv/jellyfin/Movies`, while
+`config.tv` holds `/Users/me/Rips/TV`, `media-server`, `me`, `/srv/jellyfin/TV`.
+Each value is on its own line; do not enter the comma-separated example literally.
+Profiles keep both source and destination independent, even on different servers.
+This naming convention leaves room for future profiles such as `config.music`;
+no music command or transfer is implemented or accepted yet.
+
+Before saving, setup displays the media type, exact config path, source root,
+and `username@hostname:destination`. Review the media-specific destination,
+then type `yes` to save; `no` or EOF preserves all existing files. Blank setup
+answers retain the displayed previous values. Setup validates paths locally but
+never contacts the server; preview validates the destination over SSH before
+transfer. Every run repeats the profile and root mapping, and the final individual
+movie/season target remains visible before Y/n approval. `--source` is temporary
+and does not save settings.
+
+Existing four-line movie configs keep working unchanged. There is **no automatic
+migration**. `configure` alone edits the currently active movie config (the named
+`.movies` file if present, otherwise the legacy base file), preserving the original
+command. To adopt the named profile, run `configure movies`: it offers the active
+values and saves only to `.movies` after confirmation. The legacy file remains
+untouched. When both exist, `.movies` always wins; an invalid named profile fails
+instead of silently falling back to stale legacy values. TV never falls back to
+movie paths. Existing `.tv` files keep their format and location. New files use
+mode 0600 and atomic replacement; cancellation never rewrites either profile.
+
+Setup rejects filesystem-root paths, traversal components, and repeated slash
+separators. TV also rejects control characters and symlink directory ancestors.
+Configured movie and TV source roots must not overlap. Destination roots must not
+overlap when their configured SSH hostname/alias is the same, even with different
+usernames. These checks run during setup and invocation, including `--source`.
+Different aliases can refer to the same machine; the CLI cannot infer that, nor
+resolve remote bind mounts. Check the displayed paths yourself. Existing movie
+path acceptance is otherwise retained for compatibility; use canonical absolute
+paths without symlink aliases for reliable profile separation. To correct an
+overlap, rerun setup for the profile with the wrong root. No files are moved or
+removed by configuration.
