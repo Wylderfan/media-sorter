@@ -108,6 +108,8 @@ transfer. Do not move or modify the prepared batch during selection or transfer.
 
 ```sh
 bash -n bin/media-sorter
+shellcheck bin/media-sorter
+python3 -m py_compile lib/tv.py lib/tv_remote.py lib/profiles.py
 python3 -m unittest discover -s tests -v
 ```
 
@@ -233,6 +235,49 @@ failure, and a target created during copying. On macOS the local remote fixture
 maps Linux exclusive rename to macOS `renamex_np(RENAME_EXCL)`; production still
 requires Linux. CI runs the movie and TV suites on Ubuntu and macOS.
 
+
+## Add a source from the CLI
+
+```sh
+./bin/media-sorter add-source
+# Choose movies or tv, give the profile a name (for example, living-room),
+# then enter the absolute local source, SSH host, username and remote library.
+./bin/media-sorter movies --profile living-room          # preview
+./bin/media-sorter movies --profile living-room --apply  # per-file approval
+# For a profile created with media type tv:
+./bin/media-sorter tv --profile living-room              # season preview
+```
+
+`add-source` requires Python 3.8+ and an interactive terminal. It creates a new
+profile only: it never contacts SSH, runs rsync, or transfers media. Review the
+media type, config path and source/destination mapping, then type exactly `yes`.
+Any other answer, EOF (Ctrl-D), invalid input or interruption cancels setup.
+Profile names use letters, digits, underscores and hyphens, starting with a letter
+or digit. Movies and TV are the only supported media types; this does not add a
+music sorter. You can create multiple profiles for either supported type.
+
+Profiles are stored at `${MEDIA_SORTER_CONFIG}.sources/NAME.movies` or
+`${MEDIA_SORTER_CONFIG}.sources/NAME.tv` (default:
+`~/.config/media-sorter/config.sources/`). Each uses the existing four-line plain
+data format: source, host, username, destination. Enter paths literally, including
+spaces, apostrophes, dollar signs and backslashes; do not add shell quotes.
+Configuration values are never evaluated as shell code. New profiles reject
+control characters, relative/root paths, traversal and repeated separators.
+The source must already exist; the remote destination is checked on preview.
+TV retains its stricter source-directory symlink rules.
+
+Saving publishes a complete mode-0600 file exclusively. An existing file,
+directory or symlink at that name is never overwritten, even if it appears during
+setup. Choose another name to create another profile. `--profile NAME` selects
+only that media-specific file; a missing or invalid profile fails instead of
+falling back to defaults or starting setup. `--source /absolute/path` can still
+override a selected profile for one run without changing the file.
+
+Without `--profile`, all existing default selection and `configure` commands
+continue unchanged. Adding a source does not modify default, legacy or personal
+configs. Movie/TV root separation checks include named profiles on both setup and
+normal runs; profiles of the same media type may share a library. Setup and
+selection do not infer whether different SSH aliases refer to the same server.
 
 ## Configuration and compatibility
 
