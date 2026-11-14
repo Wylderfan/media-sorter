@@ -48,10 +48,8 @@ def overlap(left, right):
 
 
 def check_movie_separation(base, source, host, user, dest):
-    movies = pathlib.Path(str(base) + '.movies')
-    if not movies.is_file():
-        movies = base
-    if movies.is_file():
+    from profiles import media_profiles
+    for movies in media_profiles(base, 'movies'):
         other_source, other_host, _other_user, other_dest = read_profile(movies)
         if overlap(source, absolute(other_source)):
             raise ValueError('Movie and TV source roots overlap; choose independent roots.')
@@ -136,24 +134,26 @@ def identity(path, context, previous=None):
 
 
 def main():
+    from profiles import profile_path
     parser = argparse.ArgumentParser()
     parser.add_argument('command', choices=['tv', 'configure-tv'])
+    parser.add_argument('--profile')
     parser.add_argument('--source')
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
     if not sys.stdin.isatty():
         raise ValueError('Interactive input is required; nothing transferred.')
     base = pathlib.Path((os.environ.get('MEDIA_SORTER_CONFIG') or os.path.expanduser('~/.config/media-sorter/config')))
-    config = pathlib.Path(str(base) + '.tv')
+    config = profile_path(base, args.profile, 'tv') if args.profile is not None else pathlib.Path(str(base) + '.tv')
     if args.command == 'configure-tv':
-        if args.source or args.apply:
+        if args.source or args.apply or args.profile is not None:
             raise ValueError('configure-tv takes no options.')
         previous = read_profile(config) if config.is_file() else ['', '', '', '']
         prompts = ('Absolute TV source: ', 'Server hostname or SSH alias: ', 'SSH username: ', 'Absolute TV destination: ')
         values = [ask(p + '[' + display_path(old) + '] ') or old for p, old in zip(prompts, previous)]
     else:
         if not config.is_file():
-            raise ValueError('TV configuration missing; run configure-tv.')
+            raise ValueError('TV configuration missing; run configure-tv or add-source.')
         values = read_profile(config)
     if len(values) != 4:
         raise ValueError('Invalid TV configuration; run configure-tv.')

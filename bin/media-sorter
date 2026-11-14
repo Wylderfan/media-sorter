@@ -61,13 +61,15 @@ overlap() {
     [ "$left" = "$right" ] || [[ "$left/" == "$right/"* ]] || [[ "$right/" == "$left/"* ]]
 }
 check_tv_separation() {
-    local tv_source tv_server _tv_user tv_dest
-    [ -f "${CONFIG_BASE}.tv" ] || return 0
-    { IFS= read -r tv_source && IFS= read -r tv_server && IFS= read -r _tv_user && IFS= read -r tv_dest; } < "${CONFIG_BASE}.tv" || die 'Invalid TV configuration; cannot check library separation.'
-    overlap "$SOURCE" "$tv_source" && die 'Movie and TV source roots overlap; choose independent roots.'
-    if [ "$SERVER" = "$tv_server" ]; then
-        overlap "$DEST" "$tv_dest" && die 'Movie and TV destination roots overlap; choose independent libraries.'
-    fi
+    local tv_source tv_server _tv_user tv_dest tv_config
+    for tv_config in "${CONFIG_BASE}.tv" "${CONFIG_BASE}.sources/"*.tv; do
+        [ -e "$tv_config" ] || [ -L "$tv_config" ] || continue
+        { IFS= read -r tv_source && IFS= read -r tv_server && IFS= read -r _tv_user && IFS= read -r tv_dest; } < "$tv_config" || die 'Invalid TV configuration; cannot check library separation.'
+        overlap "$SOURCE" "$tv_source" && die 'Movie and TV source roots overlap; choose independent roots.'
+        if [ "$SERVER" = "$tv_server" ]; then
+            overlap "$DEST" "$tv_dest" && die 'Movie and TV destination roots overlap; choose independent libraries.'
+        fi
+    done
     return 0
 }
 configure() {
@@ -105,10 +107,11 @@ load() {
 SSH_TRANSPORT=(ssh -o BatchMode=yes -o ConnectTimeout=10)
 remote() { "${SSH_TRANSPORT[@]}" -n "$USER_NAME@$SERVER" "export LC_ALL=C LANG=C; $1"; }
 help() {
-    printf '%s\n' 'Usage: media-sorter configure [movies|tv] | movies [--source /path] [--apply] | tv [--source /path] [--apply] | configure-tv | --help' 'Movies accepts MKV and MP4 (case insensitive) and previews by default. --apply still requires approval for every file.' 'Requires Bash, SSH and rsync 3.x locally and remotely. TV additionally requires Python 3 locally/remotely and Linux renameat2.'
+    printf '%s\n' 'Usage: media-sorter add-source | configure [movies|tv] | movies [--profile NAME] [--source /path] [--apply] | tv [--profile NAME] [--source /path] [--apply] | configure-tv | --help' 'Movies accepts MKV and MP4 (case insensitive) and previews by default. --apply still requires approval for every file.' 'add-source creates a named movies/TV profile without transfers or overwrites; requires Python 3.8+.' 'Requires Bash, SSH and rsync 3.x locally and remotely. TV additionally requires Python 3 locally/remotely and Linux renameat2.'
 }
 case "${1:---help}" in
     --help|-h) help; exit 0;;
+    add-source) shift; exec python3 "$(dirname -- "$0")/../lib/profiles.py" "$@";;
     configure)
         case "${2:-}" in
             '') [ "$#" -eq 1 ] || die 'Use configure [movies|tv].';;
@@ -122,14 +125,21 @@ case "${1:---help}" in
     *) die 'Unsupported command; use movies, configure, or --help. both is not supported.';;
 esac
 override=
+profile=
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --apply) APPLY=1; shift;;
+        --profile)
+            [ "$#" -ge 2 ] || die '--profile requires a name.'
+            [ -z "$profile" ] || die 'Use --profile only once.'
+            [[ "$2" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || die 'Invalid profile name.'
+            profile=$2; CONFIG=${CONFIG_BASE}.sources/$profile.movies; shift 2;;
         --source) [ "$#" -ge 2 ] || die '--source requires a path.'; override=$2; shift 2;;
         *) die "Unknown argument: $1";;
     esac
 done
 trap 'printf "Interrupted; originals retained. Hidden staging files may need cleanup.\n" >&2; summary; exit 130' INT TERM
+if [ -n "$profile" ] && [ ! -f "$CONFIG" ]; then die 'Movie profile missing; run add-source.'; fi
 load
 [ -z "$override" ] || SOURCE=$override
 valid || die 'Invalid settings or unavailable source; run configure.'
