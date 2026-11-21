@@ -42,7 +42,15 @@ display_size() {
 }
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 summary() { printf 'Summary: transferred=%d skipped=%d conflicted=%d failed=%d approved=%d\n' "$transferred" "$skipped" "$conflicted" "$failed" "$approved"; }
-ask() { [ -t 3 ] || return 1; printf '%s' "$1" >&2; IFS= read -r REPLY <&3; }
+ask() {
+    if [ -n "${MEDIA_SORTER_PROMPT_FD:-}" ]; then
+        REPLY=$(python3 "$(dirname -- "$0")/../lib/web_prompt.py" "$1")
+        return $?
+    fi
+    [ -t 3 ] || return 1
+    printf '%s' "$1" >&2
+    IFS= read -r REPLY <&3
+}
 valid() {
     case "$SOURCE:$DEST" in *$'\n'*|*$'\r'*) return 1;; esac
     case "$SOURCE" in /*) ;; *) return 1;; esac
@@ -135,7 +143,7 @@ load
 valid || die 'Invalid settings or unavailable source; run configure.'
 check_tv_separation
 profile_review
-[ -t 3 ] || die 'Interactive input is required for per-file approval; nothing transferred.'
+[ -t 3 ] || [ -n "${MEDIA_SORTER_PROMPT_FD:-}" ] || die 'Interactive input is required for per-file approval; nothing transferred.'
 command -v rsync >/dev/null || die 'Install rsync 3.x (on macOS: brew install rsync).'
 rsync --help | grep -e --protect-args -e --secluded-args >/dev/null || die 'Local rsync must support --protect-args; install rsync 3.x.'
 remote "command -v rsync >/dev/null && rsync --help | grep -e --protect-args -e --secluded-args >/dev/null" || die 'SSH failed or remote rsync lacks --protect-args; check access and install rsync 3.x.'
@@ -143,7 +151,14 @@ remote "test -d $(quote "$DEST") && test -w $(quote "$DEST")" || die 'Remote des
 [ "$APPLY" -eq 1 ] || printf 'PREVIEW: no remote library changes will be made.\n'
 # Snapshot each enumeration and check find before consuming any partial output.
 scan_dir=$(mktemp -d "${TMPDIR:-/tmp}/media-sorter.XXXXXX") || die 'Cannot create scan workspace.'
-trap 'rm -rf -- "$scan_dir"' EXIT
+stage=''
+cleanup() {
+    rm -rf -- "$scan_dir"
+    if [ -n "$stage" ]; then
+        remote "rm -f -- $(quote "$stage/payload") && rmdir -- $(quote "$stage")" || printf 'Warning: staging cleanup failed: %s\n' "$(display_path "$stage")" >&2
+    fi
+}
+trap cleanup EXIT
 : > "$scan_dir/approved" || die 'Cannot create approval list.'
 printf 'Selection phase: approve all movies before any transfers.\n'
 if ! find "$SOURCE" -mindepth 1 -maxdepth 1 \( -type d -o \( -type f \( -iname '*.mkv' -o -iname '*.mp4' \) \) \) -print0 > "$scan_dir/entries"; then
@@ -225,9 +240,10 @@ while IFS= read -r -d '' file; do
     if [ "$status" -ne 0 ]; then failed=$((failed+1)); continue; fi
     if [ "$APPLY" -eq 0 ]; then printf 'Would transfer to %s\n' "$(display_path "$target")"; continue; fi
     printf '\nTransferring %d/%d: %s\n' "$item" "$approved" "$(display_path "${file##*/}")"
-    stage=${DEST%/}/.media-sorter-$$-$RANDOM-$RANDOM
+    next_stage=${DEST%/}/.media-sorter-$$-$RANDOM-$RANDOM
     # mkdir is exclusive; a partial payload never has the final media filename.
-    if ! remote "mkdir -- $(quote "$stage")"; then failed=$((failed+1)); continue; fi
+    if ! remote "mkdir -- $(quote "$next_stage")"; then failed=$((failed+1)); continue; fi
+    stage=$next_stage
     if rsync --protect-args --progress --rsync-path="env LC_ALL=C LANG=C rsync" -e "${SSH_TRANSPORT[*]}" -t -- "$file" "$USER_NAME@$SERVER:$stage/payload"; then
         # Hard-link publication is atomic and fails if a final file already exists.
         remote "ln -T -- $(quote "$stage/payload") $(quote "$target")"
@@ -237,6 +253,7 @@ while IFS= read -r -d '' file; do
         failed=$((failed+1))
     fi
     remote "rm -f -- $(quote "$stage/payload") && rmdir -- $(quote "$stage")" || printf 'Warning: staging cleanup failed: %s\n' "$(display_path "$stage")" >&2
+    stage=''
 done < "$scan_dir/approved"
 summary
 [ "$failed" -eq 0 ]

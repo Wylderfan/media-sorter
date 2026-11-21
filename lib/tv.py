@@ -18,6 +18,9 @@ SEASON = re.compile(r'^(?:(.+?)\s+[-–]?\s*)?(?:Season\s*|S)([0-9]{1,2})$', re.
 
 def ask(prompt):
     try:
+        if os.environ.get('MEDIA_SORTER_PROMPT_FD'):
+            from web_prompt import ask as web_ask
+            return web_ask(prompt)
         return input(prompt)
     except EOFError:
         raise ValueError('Input ended; stopping without approval.') from None
@@ -141,7 +144,7 @@ def main():
     parser.add_argument('--source')
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
-    if not sys.stdin.isatty():
+    if not sys.stdin.isatty() and not os.environ.get('MEDIA_SORTER_PROMPT_FD'):
         raise ValueError('Interactive input is required; nothing transferred.')
     base = pathlib.Path((os.environ.get('MEDIA_SORTER_CONFIG') or os.path.expanduser('~/.config/media-sorter/config')))
     config = pathlib.Path(str(base) + '.tv')
