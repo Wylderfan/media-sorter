@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Media Sorter · Local</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body><main><header><span class="badge">MAC · LOCAL PORTAL</span><h1>Media Sorter</h1><p>Your staging folders. The same prompts, now in your browser.</p></header>
+<section aria-label="Start a batch"><h2>Choose your library</h2><p>These buttons sort files already in your configured staging folders.</p><div class="launch"><button data-media="movies">Upload Movies</button><button data-media="tv">Upload TV Shows</button></div>
+<label class="mode"><input type="checkbox" id="apply"> Apply transfers after individual approvals</label><p class="hint">Unchecked = preview only. Apply asks for confirmation here, then keeps every CLI approval. Originals are retained.</p></section>
+<section><div class="row"><h2 id="status" aria-live="polite">Ready to preview</h2><button id="cancel" class="secondary" disabled>Cancel batch</button></div><p id="error" role="alert"></p>
+<pre id="output" tabindex="0" aria-label="CLI output">Choose a library to begin.</pre><p id="trimmed" hidden>Older output was trimmed to keep this page bounded.</p>
+<form id="reply" hidden><label for="answer" id="prompt"></label><div class="row"><input id="answer" autocomplete="off" maxlength="1024" placeholder="Enter accepts the displayed default"><button>Submit answer</button><button type="button" id="eof" class="secondary">End input</button></div></form>
+<p class="hint">Keep this page open during transfers. If disconnected for 60 seconds, the job is cancelled. Reopen the original local link to reconnect.</p></section>
+<footer>Settings stay in your existing movie and TV profiles. Configure them in Terminal with <code>media-sorter configure movies</code> / <code>media-sorter configure tv</code>. No browser file uploads.</footer></main></body></html>

@@ -283,3 +283,118 @@ path acceptance is otherwise retained for compatibility; use canonical absolute
 paths without symlink aliases for reliable profile separation. To correct an
 overlap, rerun setup for the profile with the wrong root. No files are moved or
 removed by configuration.
+
+## Local Mac web portal
+
+The portal offers **Upload Movies** and **Upload TV Shows** for media already in
+configured Mac staging directories. There is no browser file upload. It runs the
+existing `bin/media-sorter movies` or `bin/media-sorter tv` workflow, including
+candidate ordering, exact prompts/defaults, TV identity corrections, season
+placement, batch approval, errors, progress and summary. Preview is the default.
+Check **Apply transfers after individual approvals**, confirm the browser dialog,
+and then approve each CLI item to transfer. Enter accepts the displayed CLI
+default; type `n` to skip, or another value to correct TV identity. **End input**
+is CLI EOF and cancels the selection batch; **Cancel batch** interrupts the job.
+
+### Setup and run on your Mac
+
+From an existing clone (keep `bin/` and `lib/` together):
+
+```sh
+cd /path/to/media-sorter
+# For the draft version before it is merged:
+git fetch origin
+git switch feat/local-web-portal
+
+# If not already installed; the portal requires Python 3.8+:
+brew install python rsync
+export PATH="$(brew --prefix rsync)/bin:$PATH"
+
+# Only if you need to create or change your existing settings:
+./bin/media-sorter configure movies
+./bin/media-sorter configure tv
+
+./bin/media-sorter-web
+```
+
+Open the exact `http://127.0.0.1:8765/#...` link printed in Terminal on that Mac.
+Keep Terminal running; Ctrl-C stops the server and cancels its active job. To
+use a different port or independent configuration base:
+
+```sh
+./bin/media-sorter-web --port 8766 --config "$HOME/.config/media-sorter/config"
+```
+
+`MEDIA_SORTER_CONFIG` also works. The `.movies`/legacy movie and `.tv` profiles
+retain their existing four-line format: local staging source, SSH host, SSH
+username, remote destination. The portal does not accept browser-supplied paths,
+commands, configuration edits or credentials. Missing profiles fail with setup
+instructions. Existing SSH key/agent and host-key setup is still required;
+previews perform the same read-only SSH checks as the CLI. Nothing here changes
+Jellyfin configuration, scans its API, or installs a service on the Mac.
+
+This version is based on main at `14a7dc77888a328e0bb4bcb08c375e1053531daf`,
+including the merged TV work from PR #5. Draft PR #9 at
+`44e2ad76fb15550ec1e2779dbf75060eec483d77` was inspected: it adds `add-source`
+and named `--profile` selectors, not a different movie/TV prompt workflow.
+Those unmerged selectors are not included here. The portal uses main's existing
+independent default profiles, avoiding a dependency on another draft. Terminal
+commands continue to work as before; the private prompt adapter is enabled only
+for portal-launched jobs. Movie EXIT cleanup additionally attempts to remove an
+owned private stage on graceful interruption.
+
+### Local security and interruption behavior
+
+The server binds **only `127.0.0.1`**, checks the exact Host and Origin, rejects
+cross-site requests, and requires a random session token for every API request.
+The token is in the printed URL fragment (not HTTP requests/logs), then kept in
+that tab's session storage. Reopening the original link reconnects to the current
+job. Do not share that link or put the portal behind a public proxy. It is a
+single-user local tool, not a multi-user server or a sandbox against other
+processes running as your Mac account. Restarting the server rotates its token.
+
+One job can run at a time. Every response is tied to a specific pending prompt;
+stale/double submissions fail rather than answering the next question. Filenames
+and output are rendered as text. The private prompt channel never treats media
+filenames/output as commands or prompts. Replies are single lines up to 1024
+bytes, HTTP bodies up to 8 KiB, connections up to 12 with five-second socket
+read timeouts, and the output tail is capped at 512 Ki characters. Large media
+streams through the existing rsync process; the web server never reads it into
+memory. Full CLI selection inventories retain their existing behavior and limits.
+
+If the page stops polling for **60 seconds** (closed tab, lost connection or
+browser suspension), the server sends an interrupt to the whole CLI process
+group. Normal cancellation/transfer failure attempts private-stage cleanup;
+after 15 seconds an unresponsive job is killed. Already published items stay
+published; originals remain. SIGKILL, power loss, unavailable SSH, or interruption
+while the remote stage is being created can still leave a private
+`.media-sorter-*` / `.media-sorter-tv-*` directory. Inspect only that abandoned
+stage before manually removing it; rerun the workflow to retry. Existing final
+paths remain conflicts, never overwritten or merged. Filesystem roots must be
+trusted and quiescent, as with the CLI. Closing the page is not an immediate
+stop: use **Cancel batch** when you need to interrupt now.
+
+### Portal development checks
+
+```sh
+bash -n bin/media-sorter
+bash -n bin/media-sorter-web
+shellcheck bin/media-sorter bin/media-sorter-web
+python3 -m py_compile lib/*.py
+python3 -m unittest discover -s tests -v
+
+# Optional: with Playwright and Chromium already installed on the development host:
+MEDIA_SORTER_BROWSER_TEST=1 MEDIA_SORTER_CHROMIUM=/path/to/chromium \
+  python3 -m unittest discover -s tests -p test_web_browser.py -v
+```
+
+HTTP integration tests use the actual CLI and disposable local SSH/rsync fixtures:
+movie/TV preview and apply, identity corrections, skips/EOF, duplicates,
+failed-copy retry, interruption cleanup, expired browser lease, stale replies,
+unsafe identities/symlinks, command/path injection and Host/Origin/token checks.
+The optional Chromium test clicks both upload buttons, confirms apply, answers
+movie/TV prompts, reloads a pending prompt, checks literal HTML-like filenames,
+cancels a batch and checks a narrow viewport. It downloads no browsers or media.
+Linux fixtures and Chromium were verified during development; native macOS,
+Safari and real Mac-to-Linux SSH were not locally tested. Ubuntu/macOS CI runs
+the standard CLI/HTTP tests; the Chromium test is explicitly opt-in.
